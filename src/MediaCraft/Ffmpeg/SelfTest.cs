@@ -127,6 +127,19 @@ public static class SelfTest
             }
         }
 
+        // logic 模式：只跑纯逻辑，用于 CI 这类没有 ffmpeg 的环境
+        if (string.Equals(mode, "logic", StringComparison.OrdinalIgnoreCase))
+        {
+            var logicPassed = results.Count(r => r.Passed);
+            Write(string.Empty);
+            Write("======================================================================");
+            Write($"结果：{logicPassed}/{results.Count} 通过（logic 模式：不检查 ffmpeg）");
+            Write("======================================================================");
+            WriteReport(reportPath, report);
+            Console.WriteLine($"报告已写入：{reportPath}");
+            return logicPassed == results.Count && results.Count > 0 ? 0 : 1;
+        }
+
         try
         {
             // ── 1. 定位 ffmpeg ──

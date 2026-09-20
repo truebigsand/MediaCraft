@@ -1,0 +1,43 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore MediaCraft.slnx
+
+      - name: Build (Release)
+        run: dotnet build MediaCraft.slnx -c Release --no-restore
+
+      # logic 模式只跑预设/参数纯逻辑，不依赖 ffmpeg（干净 runner 上也能过）
+      - name: Self test (pure logic, no ffmpeg required)
+        shell: pwsh
+        run: |
+          dotnet run --project src/MediaCraft/MediaCraft.csproj -c Release --no-build -- --selftest logic "$env:RUNNER_TEMP\selftest.txt"
+          Get-Content "$env:RUNNER_TEMP\selftest.txt"
+
+      - name: Publish framework-dependent
+        run: dotnet publish src/MediaCraft/MediaCraft.csproj -c Release -r win-x64 --self-contained false -o dist/framework-dependent
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaCraft-framework-dependent
+          path: dist/framework-dependent
+          if-no-files-found: error
