@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>MediaCraft</AssemblyName>
+    <RootNamespace>MediaCraft</RootNamespace>
+    <Version>1.0.0</Version>
+    <StartupObject>MediaCraft.Program</StartupObject>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>
+    <NeutralLanguage>zh-Hans</NeutralLanguage>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.0" />
+  </ItemGroup>
+
+</Project>
