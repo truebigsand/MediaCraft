@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
@@ -38,6 +40,10 @@ public partial class App : Application
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        // 绑定失败默认是静默的（例如把命令名写错，按钮点了没反应），
+        // 这里全部转进日志，排障时一眼能看到是哪条绑定不对。
+        AttachBindingErrorListener();
 
         var settingsService = new SettingsService();
         settingsService.Load();
@@ -125,5 +131,49 @@ public partial class App : Application
     {
         AppLog.Error(e.Exception, "未观察的任务异常");
         e.SetObserved();
+    }
+
+    /// <summary>把 WPF 的数据绑定错误接进日志。</summary>
+    private static void AttachBindingErrorListener()
+    {
+        try
+        {
+            PresentationTraceSources.Refresh();
+            var source = PresentationTraceSources.DataBindingSource;
+            source.Listeners.Add(new BindingErrorListener());
+            source.Switch.Level = SourceLevels.Warning;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(ex, "挂载绑定错误监听");
+        }
+    }
+
+    /// <summary>把 WPF 绑定诊断输出写成日志（默认这些信息只在调试器输出窗口里）。</summary>
+    private sealed class BindingErrorListener : TraceListener
+    {
+        private readonly StringBuilder _buffer = new();
+
+        public override void Write(string? message) => _buffer.Append(message);
+
+        public override void WriteLine(string? message)
+        {
+            _buffer.Append(message);
+            var text = _buffer.ToString().Trim();
+            _buffer.Clear();
+
+            if (text.Length == 0)
+            {
+                return;
+            }
+
+            // 只记绑定失败的条目，忽略纯信息性输出
+            if (text.Contains("BindingExpression", StringComparison.Ordinal) ||
+                text.Contains("Cannot find", StringComparison.Ordinal) ||
+                text.Contains("path error", StringComparison.OrdinalIgnoreCase))
+            {
+                AppLog.Warn("绑定问题：" + text, "Binding");
+            }
+        }
     }
 }

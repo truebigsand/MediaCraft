@@ -31,9 +31,7 @@
                 <views:PresetView DataContext="{Binding PresetPage}" />
             </TabItem>
             <TabItem Header="设置">
-                <Border Style="{StaticResource CardBorder}" Margin="0,8,0,0">
-                    <TextBlock x:Name="PlaceholderSettings" Text="设置页（阶段 6 接入）" Style="{StaticResource HintText}" />
-                </Border>
+                <views:SettingsView DataContext="{Binding SettingsPage}" />
             </TabItem>
         </TabControl>
 

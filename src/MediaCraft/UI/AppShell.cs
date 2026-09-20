@@ -20,7 +20,7 @@ public sealed class AppShell
         Queue = new Queue.TranscodeQueue(Ffmpeg, settings, System.Windows.Application.Current.Dispatcher);
         Presets = new Presets.PresetStore();
         Presets.Load();
-        Main = new ViewModels.MainViewModel(Ffmpeg, settings, Queue, Presets);
+        Main = new ViewModels.MainViewModel(Ffmpeg, settings, Queue, Presets, InitializeFfmpegAsync);
 
         Queue.LoadPersisted();
     }

@@ -13,7 +13,12 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly FfmpegContext _ffmpeg;
     private readonly TranscodeQueue _queue;
 
-    public MainViewModel(FfmpegContext ffmpeg, SettingsService settings, TranscodeQueue queue, Presets.PresetStore presets)
+    public MainViewModel(
+        FfmpegContext ffmpeg,
+        SettingsService settings,
+        TranscodeQueue queue,
+        Presets.PresetStore presets,
+        Func<Task> reinitializeFfmpeg)
     {
         _ffmpeg = ffmpeg;
         _queue = queue;
@@ -21,6 +26,7 @@ public sealed partial class MainViewModel : ObservableObject
         Transcode = new TranscodeViewModel(ffmpeg, settings, queue, presets);
         QueuePage = new QueueViewModel(queue);
         PresetPage = new PresetViewModel(presets, Transcode);
+        SettingsPage = new SettingsViewModel(settings, ffmpeg, reinitializeFfmpeg);
 
         _ffmpeg.PropertyChanged += (_, _) =>
         {
@@ -43,6 +49,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>预设页。</summary>
     public PresetViewModel PresetPage { get; }
+
+    /// <summary>设置页。</summary>
+    public SettingsViewModel SettingsPage { get; }
 
     /// <summary>状态栏：ffmpeg 状态。</summary>
     public string FfmpegStatus => _ffmpeg.StatusText;

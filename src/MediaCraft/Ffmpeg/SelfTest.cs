@@ -50,6 +50,19 @@ public static class SelfTest
         public List<string> Details { get; } = [];
 
         public List<string> Failures { get; } = [];
+
+        public CaseResult WithDetail(string detail)
+        {
+            Details.Add(detail);
+            return this;
+        }
+
+        public CaseResult WithFailure(string failure)
+        {
+            Failures.Add(failure);
+            Passed = false;
+            return this;
+        }
     }
 
     private sealed class Context
@@ -140,6 +153,24 @@ public static class SelfTest
             Write($"  编码器 : {capabilities.Encoders.Count} 个");
             Write($"  硬加速 : {string.Join(", ", capabilities.HwAccels)}");
 
+            var locateCase = new CaseResult { Name = "ffmpeg 定位与能力探测" };
+            locateCase.Details.Add($"路径：{paths.Ffmpeg}");
+            locateCase.Details.Add($"来源：{paths.Source}");
+            locateCase.Details.Add($"版本：{paths.Version}");
+            locateCase.Details.Add($"编码器 {capabilities.Encoders.Count} 个 / 硬件加速 {capabilities.HwAccels.Count} 种 / 主版本 {capabilities.MajorVersion}");
+            if (string.IsNullOrWhiteSpace(paths.Version) || capabilities.Encoders.Count == 0)
+            {
+                locateCase.Failures.Add("版本信息或编码器列表为空");
+            }
+
+            if (capabilities.HwAccels.Count == 0)
+            {
+                locateCase.Failures.Add("没有探测到任何硬件加速方式（不影响软编，但硬解/硬编会不可用）");
+            }
+
+            locateCase.Passed = locateCase.Failures.Count == 0;
+            results.Add(locateCase);
+
             // ── 3. 编码器功能探测（真跑一帧）──
             Write(string.Empty);
             Write("[3] 编码器功能探测（真跑一帧，编译进去 ≠ 能跑）");
@@ -154,6 +185,28 @@ public static class SelfTest
                 var mark = capabilities.IsEncoderAvailable(encoder.Id) ? "✓" : "✗";
                 Write($"  {mark} {encoder.Id,-14} {encoder.DisplayName}");
             }
+
+            var encoderCase = new CaseResult { Name = "编码器功能探测" };
+            var availableEncoders = EncoderCatalog.All.Where(e => capabilities.IsEncoderAvailable(e.Id)).ToArray();
+            var rejectedEncoders = EncoderCatalog.All.Where(e => capabilities.IsFunctionallyRejected(e.Id)).ToArray();
+            encoderCase.Details.Add($"可用 {availableEncoders.Length}/{EncoderCatalog.All.Count}：{string.Join("、", availableEncoders.Select(e => e.Id))}");
+            if (rejectedEncoders.Length > 0)
+            {
+                encoderCase.Details.Add($"功能探测失败：{string.Join("、", rejectedEncoders.Select(e => e.Id))}");
+            }
+
+            if (availableEncoders.Length == 0)
+            {
+                encoderCase.Failures.Add("没有任何可用的视频编码器");
+            }
+
+            if (availableEncoders.All(e => e.IsHardware))
+            {
+                encoderCase.Failures.Add("只有硬件编码器可用，一个软件编码器都没探测到（ffmpeg 可能不完整）");
+            }
+
+            encoderCase.Passed = encoderCase.Failures.Count == 0;
+            results.Add(encoderCase);
 
             // ── 4. 生成测试素材 ──
             Write(string.Empty);
@@ -206,9 +259,20 @@ public static class SelfTest
             if (!sampleOk.Ok || !muxOk.Ok)
             {
                 Write("  ✗ 素材生成失败，终止。");
+                results.Add(new CaseResult
+                {
+                    Name = "测试素材生成",
+                    Passed = false,
+                }.WithFailure($"测试片生成失败：{FirstLine(sampleOk.Ok ? muxOk.Output : sampleOk.Output)}"));
                 WriteReport(reportPath, report);
                 return 1;
             }
+
+            results.Add(new CaseResult
+            {
+                Name = "测试素材生成",
+                Passed = true,
+            }.WithDetail("1280x720 30fps 5s + AAC 测试片与内封字幕 MKV 生成成功"));
 
             var context = new Context
             {
@@ -224,25 +288,33 @@ public static class SelfTest
                 Capabilities = capabilities,
             };
 
-            // ── 5. 用例矩阵 ──
-            Write(string.Empty);
-            Write("[5] 转码矩阵（每项都真跑，并用 ffprobe 校验产出）");
-
-            var definitions = BuildCases(context);
-            foreach (var (name, sourcePath, parameters, expectation) in definitions)
+            // ── 5. 用例矩阵（快速模式跳过）──
+            if (string.Equals(mode, "quick", StringComparison.OrdinalIgnoreCase))
             {
-                var result = await RunCaseAsync(name, sourcePath, parameters, expectation, context).ConfigureAwait(false);
-                results.Add(result);
-                var mark = result.Passed ? "✓ PASS" : "✗ FAIL";
-                Write($"  {mark}  {name}");
-                foreach (var detail in result.Details)
-                {
-                    Write($"          {detail}");
-                }
+                Write(string.Empty);
+                Write("[5] 转码矩阵：快速模式，已跳过（用 --selftest all 跑完整矩阵）");
+            }
+            else
+            {
+                Write(string.Empty);
+                Write("[5] 转码矩阵（每项都真跑，并用 ffprobe 校验产出）");
 
-                foreach (var failure in result.Failures)
+                var definitions = BuildCases(context);
+                foreach (var (name, sourcePath, parameters, expectation) in definitions)
                 {
-                    Write($"          ! {failure}");
+                    var result = await RunCaseAsync(name, sourcePath, parameters, expectation, context).ConfigureAwait(false);
+                    results.Add(result);
+                    var mark = result.Passed ? "✓ PASS" : "✗ FAIL";
+                    Write($"  {mark}  {name}");
+                    foreach (var detail in result.Details)
+                    {
+                        Write($"          {detail}");
+                    }
+
+                    foreach (var failure in result.Failures)
+                    {
+                        Write($"          ! {failure}");
+                    }
                 }
             }
         }
