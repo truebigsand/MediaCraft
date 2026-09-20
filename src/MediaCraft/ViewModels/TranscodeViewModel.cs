@@ -8,6 +8,7 @@ using CommunityToolkit.Mvvm.Input;
 using MediaCraft.Ffmpeg;
 using MediaCraft.Logging;
 using MediaCraft.Media;
+using MediaCraft.Presets;
 using MediaCraft.Queue;
 using MediaCraft.Settings;
 
@@ -24,6 +25,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
     private readonly FfmpegContext _ffmpeg;
     private readonly SettingsService _settings;
     private readonly TranscodeQueue _queue;
+    private readonly PresetStore _presets;
     private readonly DispatcherTimer _revalidateTimer;
 
     /// <summary>新文件的参数模板。</summary>
@@ -31,11 +33,12 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
     private bool _suppressRevalidate;
 
-    public TranscodeViewModel(FfmpegContext ffmpeg, SettingsService settings, TranscodeQueue queue)
+    public TranscodeViewModel(FfmpegContext ffmpeg, SettingsService settings, TranscodeQueue queue, PresetStore presets)
     {
         _ffmpeg = ffmpeg;
         _settings = settings;
         _queue = queue;
+        _presets = presets;
 
         _templateParams.NamingTemplate = settings.Current.NamingTemplate;
         _templateParams.Container = settings.Current.DefaultContainer;
@@ -108,6 +111,50 @@ public sealed partial class TranscodeViewModel : ObservableObject
     private string _encoderHint = string.Empty;
 
     // ── 下拉数据源 ──
+
+    /// <summary>预设列表（内置 + 自定义）。</summary>
+    public ObservableCollection<Preset> Presets => _presets.All;
+
+    [ObservableProperty]
+    private Preset? _selectedPreset;
+
+    /// <summary>另存为预设时的名称 / 描述。</summary>
+    [ObservableProperty]
+    private string _newPresetName = string.Empty;
+
+    [ObservableProperty]
+    private string _newPresetDescription = string.Empty;
+
+    /// <summary>把选中的预设套用到当前编辑目标。</summary>
+    [RelayCommand]
+    private void ApplyPreset()
+    {
+        if (SelectedPreset is null)
+        {
+            return;
+        }
+
+        PresetStore.ApplyTo(SelectedPreset, Params);
+        StatusText = $"已应用预设「{SelectedPreset.Name}」";
+        Revalidate();
+    }
+
+    /// <summary>把当前参数另存为预设。</summary>
+    [RelayCommand]
+    private void SaveCurrentAsPreset()
+    {
+        if (string.IsNullOrWhiteSpace(NewPresetName))
+        {
+            StatusText = "请先填预设名称";
+            return;
+        }
+
+        var preset = _presets.SaveAs(NewPresetName, NewPresetDescription, Params);
+        SelectedPreset = preset;
+        NewPresetName = string.Empty;
+        NewPresetDescription = string.Empty;
+        StatusText = $"已保存预设「{preset.Name}」（同名预设会被覆盖）";
+    }
 
     public IReadOnlyList<EncoderDefinition> Encoders => EncoderCatalog.All;
 

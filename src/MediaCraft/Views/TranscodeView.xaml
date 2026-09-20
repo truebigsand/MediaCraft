@@ -111,6 +111,43 @@
         <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
             <StackPanel>
 
+                <!-- ── 预设 ── -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="预设" Style="{StaticResource SectionTitle}" />
+
+                        <ComboBox ItemsSource="{Binding Presets}"
+                                  SelectedItem="{Binding SelectedPreset, Mode=TwoWay}"
+                                  DisplayMemberPath="Name" />
+
+                        <TextBlock Text="{Binding SelectedPreset.FullDescription}"
+                                   Style="{StaticResource HintText}"
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap" />
+
+                        <Button Content="应用到当前参数面板"
+                                Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ApplyPresetCommand}"
+                                HorizontalAlignment="Left"
+                                Margin="0,8,0,0" />
+
+                        <CheckBox Content="另存为新预设" x:Name="PresetSaveToggle" Margin="0,10,0,0" IsChecked="False" />
+                        <StackPanel Visibility="{Binding IsChecked, ElementName=PresetSaveToggle, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="预设名称（同名会覆盖）" Style="{StaticResource HintText}" Margin="0,4,0,2" />
+                            <TextBox Text="{Binding NewPresetName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Text="描述（可选）" Style="{StaticResource HintText}" Margin="0,6,0,2" />
+                            <TextBox Text="{Binding NewPresetDescription, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button Content="保存当前参数为预设"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding SaveCurrentAsPresetCommand}"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,8,0,0" />
+                            <TextBlock Text="轨道动作会归纳成意图（例如「烧入第一条字幕」）随预设保存，套用时按目标文件自己的轨道落实。"
+                                       Style="{StaticResource HintText}" Margin="0,6,0,0" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
                 <!-- ── 视频 ── -->
                 <Border Style="{StaticResource CardBorder}">
                     <StackPanel>

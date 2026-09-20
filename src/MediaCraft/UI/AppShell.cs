@@ -18,10 +18,15 @@ public sealed class AppShell
         _settings = settings;
         Ffmpeg = new FfmpegContext(settings);
         Queue = new Queue.TranscodeQueue(Ffmpeg, settings, System.Windows.Application.Current.Dispatcher);
-        Main = new ViewModels.MainViewModel(Ffmpeg, settings, Queue);
+        Presets = new Presets.PresetStore();
+        Presets.Load();
+        Main = new ViewModels.MainViewModel(Ffmpeg, settings, Queue, Presets);
 
         Queue.LoadPersisted();
     }
+
+    /// <summary>预设仓库。</summary>
+    public Presets.PresetStore Presets { get; }
 
     /// <summary>ffmpeg 上下文（路径与能力探测）。</summary>
     public FfmpegContext Ffmpeg { get; }

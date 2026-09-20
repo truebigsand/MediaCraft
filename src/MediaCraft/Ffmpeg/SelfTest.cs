@@ -96,6 +96,24 @@ public static class SelfTest
         Write($"MediaCraft 自检报告   {DateTime.Now:yyyy-MM-dd HH:mm:ss}   模式：{mode}");
         Write("======================================================================");
 
+        // ── 0. 纯逻辑（不依赖 ffmpeg，也不碰用户的预设/设置文件）──
+        Write(string.Empty);
+        Write("[0] 预设与参数逻辑（纯逻辑）");
+        foreach (var result in RunPresetTests())
+        {
+            results.Add(result);
+            Write($"  {(result.Passed ? "✓ PASS" : "✗ FAIL")}  {result.Name}");
+            foreach (var detail in result.Details)
+            {
+                Write($"          {detail}");
+            }
+
+            foreach (var failure in result.Failures)
+            {
+                Write($"          ! {failure}");
+            }
+        }
+
         try
         {
             // ── 1. 定位 ffmpeg ──
@@ -255,10 +273,230 @@ public static class SelfTest
         return passed == results.Count && results.Count > 0 ? 0 : 1;
     }
 
+    /// <summary>
+    /// 预设与参数的纯逻辑测试：不执行 ffmpeg，也不读写用户的预设文件。
+    /// 覆盖：内置预设完整性、轨道意图归纳、意图套用、JSON 三种结构解析、导出解析往返一致。
+    /// </summary>
+    private static List<CaseResult> RunPresetTests()
+    {
+        var results = new List<CaseResult>();
+
+        // ── 1. 内置预设完整性 ──
+        var builtInCase = new CaseResult { Name = "预设 · 内置预设清单" };
+        var builtIns = Presets.PresetStore.BuiltInPresets;
+        builtInCase.Details.Add($"内置预设 {builtIns.Count} 个");
+
+        if (builtIns.Count < 12)
+        {
+            builtInCase.Failures.Add($"内置预设数量偏少：{builtIns.Count}");
+        }
+
+        var duplicateNames = builtIns.GroupBy(p => p.Name).Where(g => g.Count() > 1).Select(g => g.Key).ToArray();
+        if (duplicateNames.Length > 0)
+        {
+            builtInCase.Failures.Add("内置预设重名：" + string.Join("、", duplicateNames));
+        }
+
+        foreach (var preset in builtIns)
+        {
+            if (string.IsNullOrWhiteSpace(preset.Name) || string.IsNullOrWhiteSpace(preset.Summary))
+            {
+                builtInCase.Failures.Add($"预设「{preset.Name}」缺少名称或摘要");
+            }
+
+            // 预设引用的编码器必须真实存在（防手抖写错 id）
+            if (!EncoderCatalog.All.Any(e => e.Id == preset.Parameters.EncoderId))
+            {
+                builtInCase.Failures.Add($"预设「{preset.Name}」引用了不存在的编码器 {preset.Parameters.EncoderId}");
+            }
+
+            if (!EncoderCatalog.Containers.Any(c => c.Extension == preset.Parameters.Container))
+            {
+                builtInCase.Failures.Add($"预设「{preset.Name}」引用了不存在的容器 {preset.Parameters.Container}");
+            }
+        }
+
+        builtInCase.Details.Add("示例：" + string.Join(" / ", builtIns.Take(4).Select(p => $"{p.Name}（{p.Summary}）")));
+        builtInCase.Passed = builtInCase.Failures.Count == 0;
+        results.Add(builtInCase);
+
+        // ── 2. 从参数归纳轨道意图 ──
+        var intentCase = new CaseResult { Name = "预设 · 从参数归纳轨道意图" };
+        var burnParams = new TranscodeParams();
+        burnParams.SubtitleTracks.Add(new SubtitleTrackParams(2, "字幕 #2", "subrip", false) { Action = SubtitleActionKind.Copy });
+        burnParams.SubtitleTracks.Add(new SubtitleTrackParams(3, "字幕 #3", "subrip", false) { Action = SubtitleActionKind.Burn });
+        burnParams.AudioTracks.Add(new AudioTrackParams(1, "音频 #1", "aac", 2, "chi") { Action = AudioActionKind.Encode, CodecId = "aac", BitRateKbps = 192 });
+
+        var burnIntent = Presets.PresetTrackIntent.FromParams(burnParams);
+        intentCase.Details.Add($"烧入意图：{burnIntent.Description}");
+        if (burnIntent.SubtitleAction != SubtitleActionKind.Burn || !burnIntent.SubtitleFirstOnly)
+        {
+            intentCase.Failures.Add("混合字幕动作未被归纳为「烧入第一条」");
+        }
+
+        if (burnIntent.AudioAction != AudioActionKind.Encode || burnIntent.AudioCodecId != "aac" || burnIntent.AudioBitRateKbps != 192)
+        {
+            intentCase.Failures.Add("音轨重编码意图没有正确带出编码器与码率");
+        }
+
+        var mixedParams = new TranscodeParams();
+        mixedParams.AudioTracks.Add(new AudioTrackParams(1, "a", "aac", 2, "") { Action = AudioActionKind.Copy });
+        mixedParams.AudioTracks.Add(new AudioTrackParams(2, "b", "aac", 2, "") { Action = AudioActionKind.Drop });
+        var mixedIntent = Presets.PresetTrackIntent.FromParams(mixedParams);
+        intentCase.Details.Add($"混合音轨动作：{mixedIntent.Description}");
+        if (mixedIntent.AudioAction != AudioActionKind.Copy)
+        {
+            intentCase.Failures.Add("混合音轨动作应退化为「直通」");
+        }
+
+        intentCase.Passed = intentCase.Failures.Count == 0;
+        results.Add(intentCase);
+
+        // ── 3. 套用预设：标量 + 轨道意图 ──
+        var applyCase = new CaseResult { Name = "预设 · 套用到目标参数（标量 + 轨道意图）" };
+        var burnPreset = builtIns.FirstOrDefault(p => p.Name.Contains("烧入第一条字幕", StringComparison.Ordinal));
+        if (burnPreset is null)
+        {
+            applyCase.Failures.Add("找不到「烧入第一条字幕」内置预设");
+        }
+        else
+        {
+            var target = new TranscodeParams();
+            target.SubtitleTracks.Add(new SubtitleTrackParams(2, "字幕 #2", "subrip", false));
+            target.SubtitleTracks.Add(new SubtitleTrackParams(5, "字幕 #5", "subrip", false));
+            target.SubtitleTracks.Add(new SubtitleTrackParams(7, "字幕 #7", "subrip", false));
+            target.AudioTracks.Add(new AudioTrackParams(1, "音频 #1", "aac", 2, ""));
+            target.AudioTracks.Add(new AudioTrackParams(3, "音频 #3", "ac3", 6, ""));
+            target.EncoderId = "libx265";
+            target.Container = "webm";
+
+            Presets.PresetStore.ApplyTo(burnPreset, target);
+
+            applyCase.Details.Add($"编码器 {target.EncoderId} / 容器 {target.Container} / 质量 {target.QualitySlider}");
+            applyCase.Details.Add("字幕动作：" + string.Join("、", target.SubtitleTracks.Select(t => $"{t.StreamIndex}→{t.Action}")));
+            applyCase.Details.Add("音轨动作：" + string.Join("、", target.AudioTracks.Select(t => $"{t.StreamIndex}→{t.Action}")));
+
+            if (target.EncoderId != "h264_nvenc" || target.Container != "mp4")
+            {
+                applyCase.Failures.Add("标量参数没有被预设覆盖");
+            }
+
+            if (target.SubtitleTracks[0].Action != SubtitleActionKind.Burn)
+            {
+                applyCase.Failures.Add("第一条字幕轨应设为烧入");
+            }
+
+            if (target.SubtitleTracks.Skip(1).Any(t => t.Action != SubtitleActionKind.Copy))
+            {
+                applyCase.Failures.Add("其余字幕轨应保持内封（FirstOnly 语义）");
+            }
+
+            if (target.AudioTracks.Any(t => t.Action != AudioActionKind.Copy))
+            {
+                applyCase.Failures.Add("音轨意图应为全部直通");
+            }
+
+            if (target.SubtitleTracks.Count != 3 || target.AudioTracks.Count != 2)
+            {
+                applyCase.Failures.Add("套用预设不应改动目标的轨道数量");
+            }
+        }
+
+        applyCase.Passed = applyCase.Failures.Count == 0;
+        results.Add(applyCase);
+
+        // ── 4. JSON 三种结构解析 + 导出往返 ──
+        var jsonCase = new CaseResult { Name = "预设 · JSON 解析与导出往返" };
+        var sample = builtIns[0].Clone();
+        sample.IsBuiltIn = false;
+        sample.Name = "往返测试预设";
+
+        var wrapper = System.Text.Json.JsonSerializer.Serialize(
+            new Presets.PresetFile { Presets = [sample] },
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } });
+        var arrayJson = System.Text.Json.JsonSerializer.Serialize(new[] { sample },
+            new System.Text.Json.JsonSerializerOptions { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } });
+        var singleJson = System.Text.Json.JsonSerializer.Serialize(sample,
+            new System.Text.Json.JsonSerializerOptions { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } });
+
+        foreach (var (label, json) in new[] { ("包装结构", wrapper), ("数组结构", arrayJson), ("单对象结构", singleJson) })
+        {
+            try
+            {
+                var parsed = Presets.PresetStore.Parse(json);
+                jsonCase.Details.Add($"{label}：解析出 {parsed.Count} 个预设");
+                if (parsed.Count != 1)
+                {
+                    jsonCase.Failures.Add($"{label} 应解析出 1 个预设，实际 {parsed.Count}");
+                }
+                else
+                {
+                    var roundTrip = parsed[0];
+                    if (roundTrip.Name != sample.Name || roundTrip.Parameters.EncoderId != sample.Parameters.EncoderId ||
+                        roundTrip.Parameters.QualitySlider != sample.Parameters.QualitySlider ||
+                        roundTrip.Intent.AudioAction != sample.Intent.AudioAction)
+                    {
+                        jsonCase.Failures.Add($"{label} 往返后字段不一致");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                jsonCase.Failures.Add($"{label} 解析异常：{ex.Message}");
+            }
+        }
+
+        try
+        {
+            var parsed = Presets.PresetStore.Parse("{ this is not json }");
+            jsonCase.Details.Add($"非法内容解析出 {parsed.Count} 个预设（不抛异常）");
+            if (parsed.Count != 0)
+            {
+                jsonCase.Failures.Add("非法 JSON 应返回 0 个预设");
+            }
+        }
+        catch (Exception)
+        {
+            // 抛异常也算合理处理
+            jsonCase.Details.Add("非法内容按预期抛出异常");
+        }
+
+        jsonCase.Passed = jsonCase.Failures.Count == 0;
+        results.Add(jsonCase);
+
+        // ── 5. 参数克隆独立性（每文件独立参数的基础）──
+        var cloneCase = new CaseResult { Name = "参数 · 克隆独立性" };
+        var original = new TranscodeParams { EncoderId = "libx264", QualitySlider = 60 };
+        original.AudioTracks.Add(new AudioTrackParams(1, "音频 #1", "aac", 2, "chi"));
+        original.SubtitleTracks.Add(new SubtitleTrackParams(2, "字幕 #2", "subrip", false));
+
+        var clone = original.Clone();
+        clone.EncoderId = "av1_nvenc";
+        clone.QualitySlider = 90;
+        clone.AudioTracks[0].Action = AudioActionKind.Encode;
+        clone.AudioTracks[0].CodecId = "libopus";
+        clone.SubtitleStyle.FontSize = 44;
+        clone.AudioTracks.Add(new AudioTrackParams(9, "音频 #9", "ac3", 6, ""));
+
+        cloneCase.Details.Add($"原对象：{original.EncoderId} / 质量 {original.QualitySlider} / 音轨 {original.AudioTracks.Count} 条 / 音轨动作 {original.AudioTracks[0].Action} / 字号 {original.SubtitleStyle.FontSize}");
+        cloneCase.Details.Add($"克隆后：{clone.EncoderId} / 质量 {clone.QualitySlider} / 音轨 {clone.AudioTracks.Count} 条 / 音轨动作 {clone.AudioTracks[0].Action} / 字号 {clone.SubtitleStyle.FontSize}");
+
+        if (original.EncoderId != "libx264" || original.QualitySlider != 60 ||
+            original.AudioTracks.Count != 1 || original.AudioTracks[0].Action != AudioActionKind.Copy ||
+            original.SubtitleStyle.FontSize != 24)
+        {
+            cloneCase.Failures.Add("克隆后修改影响了原对象（深拷贝不彻底）");
+        }
+
+        cloneCase.Passed = cloneCase.Failures.Count == 0;
+        results.Add(cloneCase);
+
+        return results;
+    }
+
     /// <summary>构造全部用例。</summary>
     private static List<(string Name, string SourcePath, TranscodeParams Parameters, Expectation Expectation)> BuildCases(
-        Context context)
-    {
+        Context context)    {
         var cases = new List<(string, string, TranscodeParams, Expectation)>();
         var sampleInfo = MediaProbe.ProbeAsync(context.Paths.Ffprobe, context.SamplePath).GetAwaiter().GetResult();
         if (sampleInfo is null)

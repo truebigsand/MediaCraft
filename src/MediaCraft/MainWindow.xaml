@@ -28,9 +28,7 @@
                 <views:QueueView DataContext="{Binding QueuePage}" />
             </TabItem>
             <TabItem Header="预设">
-                <Border Style="{StaticResource CardBorder}" Margin="0,8,0,0">
-                    <TextBlock x:Name="PlaceholderPresets" Text="预设页（阶段 5 接入）" Style="{StaticResource HintText}" />
-                </Border>
+                <views:PresetView DataContext="{Binding PresetPage}" />
             </TabItem>
             <TabItem Header="设置">
                 <Border Style="{StaticResource CardBorder}" Margin="0,8,0,0">
