@@ -23,10 +23,14 @@ public sealed class FfmpegCapabilities
         Configuration = configuration;
         RawEncoders = rawEncoders;
         RawHwAccels = rawHwAccels;
+        MajorVersion = ParseMajorVersion(version);
     }
 
     /// <summary>`ffmpeg -version` 首行。</summary>
     public string Version { get; }
+
+    /// <summary>主版本号（预检里用于按版本条件触发规则）；解析失败为 0。</summary>
+    public int MajorVersion { get; }
 
     /// <summary>configure 参数行。</summary>
     public string Configuration { get; }
@@ -178,5 +182,12 @@ public sealed class FfmpegCapabilities
     {
         var index = text.IndexOf('\n');
         return (index < 0 ? text : text[..index]).Trim();
+    }
+
+    /// <summary>从 "ffmpeg version 8.1.2-full_build-..." 里取主版本号。</summary>
+    public static int ParseMajorVersion(string versionLine)
+    {
+        var match = Regex.Match(versionLine, @"version\s+n?(\d+)\.(\d+)", RegexOptions.IgnoreCase);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var major) ? major : 0;
     }
 }
