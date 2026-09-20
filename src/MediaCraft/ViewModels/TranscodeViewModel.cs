@@ -418,7 +418,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
         }
 
         var jobs = candidates
-            .Select(file => new TranscodeJob(file.Path, file.Parameters.Clone()) { ParametersSummary = file.Parameters.Summary })
+            .Select(file => new TranscodeJob(file.Path, file.Parameters.Clone()) { ParametersSummary = file.ParametersSummary })
             .ToArray();
 
         _queue.Enqueue(jobs);

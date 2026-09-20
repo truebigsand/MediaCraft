@@ -118,7 +118,11 @@ public sealed partial class MediaFileViewModel : ObservableObject
     /// <summary>刷新参数摘要显示。</summary>
     public void RefreshSummary()
     {
-        ParametersSummary = Parameters.Summary;
+        // 字幕文件的参数摘要要按「字幕转换」描述：这时编码器/容器参数根本不参与执行
+        ParametersSummary = Info is not null && Ffmpeg.TranscodeCommandBuilder.IsSubtitleOnly(Info)
+            ? $"字幕转换 → {Parameters.SubtitleConvertFormat.ToString().ToUpperInvariant()}"
+            : Parameters.Summary;
+
         OnPropertyChanged(nameof(IsReady));
     }
 

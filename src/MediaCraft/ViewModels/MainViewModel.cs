@@ -19,6 +19,7 @@ public sealed partial class MainViewModel : ObservableObject
         _queue = queue;
 
         Transcode = new TranscodeViewModel(ffmpeg, settings, queue);
+        QueuePage = new QueueViewModel(queue);
 
         _ffmpeg.PropertyChanged += (_, _) =>
         {
@@ -35,6 +36,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>转码页。</summary>
     public TranscodeViewModel Transcode { get; }
+
+    /// <summary>队列页。</summary>
+    public QueueViewModel QueuePage { get; }
 
     /// <summary>状态栏：ffmpeg 状态。</summary>
     public string FfmpegStatus => _ffmpeg.StatusText;

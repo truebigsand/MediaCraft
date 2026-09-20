@@ -25,9 +25,7 @@
                 <views:TranscodeView DataContext="{Binding Transcode}" />
             </TabItem>
             <TabItem Header="队列">
-                <Border Style="{StaticResource CardBorder}" Margin="0,8,0,0">
-                    <TextBlock x:Name="PlaceholderQueue" Text="队列页（阶段 4 接入）" Style="{StaticResource HintText}" />
-                </Border>
+                <views:QueueView DataContext="{Binding QueuePage}" />
             </TabItem>
             <TabItem Header="预设">
                 <Border Style="{StaticResource CardBorder}" Margin="0,8,0,0">
