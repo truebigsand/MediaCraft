@@ -10,6 +10,9 @@ internal static class Program
     private const string MutexName = "MediaCraft_SingleInstance";
     private const string ShowEventName = "MediaCraft_ShowRequest";
 
+    /// <summary>命令行传入的文件 / 文件夹（启动后自动加入列表）。</summary>
+    public static string[] StartupPaths { get; private set; } = [];
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -18,6 +21,9 @@ internal static class Program
         {
             return Ffmpeg.SelfTest.RunAsync(args).GetAwaiter().GetResult();
         }
+
+        // 其余参数按「文件/文件夹路径」处理，实现「打开方式」与命令行直接添加
+        StartupPaths = args.Where(a => !a.StartsWith('-')).ToArray();
 
         // initiallyOwned: false —— 不能请求所有权，否则第二个实例会阻塞在构造上
         using var mutex = new Mutex(initiallyOwned: false, MutexName, out bool createdNew);

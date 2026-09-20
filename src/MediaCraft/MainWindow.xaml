@@ -1,9 +1,10 @@
 <Window x:Class="MediaCraft.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:MediaCraft.Views"
         Title="MediaCraft — FFmpeg 转码工具"
-        Width="1200" Height="780"
-        MinWidth="980" MinHeight="620"
+        Width="1240" Height="800"
+        MinWidth="1020" MinHeight="640"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource PageBrush}"
         FontFamily="Microsoft YaHei UI, Microsoft YaHei, Segoe UI"
@@ -21,9 +22,7 @@
         <!-- ═══════════════ 主标签页 ═══════════════ -->
         <TabControl Grid.Row="0" x:Name="MainTabs" Background="Transparent" BorderThickness="0">
             <TabItem Header="转码">
-                <Border Style="{StaticResource CardBorder}" Margin="0,8,0,0">
-                    <TextBlock x:Name="PlaceholderTranscode" Text="转码页（阶段 3 接入）" Style="{StaticResource HintText}" />
-                </Border>
+                <views:TranscodeView DataContext="{Binding Transcode}" />
             </TabItem>
             <TabItem Header="队列">
                 <Border Style="{StaticResource CardBorder}" Margin="0,8,0,0">
@@ -113,13 +112,19 @@
         <!-- ═══════════════ 状态栏 ═══════════════ -->
         <StatusBar Grid.Row="3" Margin="0,6,0,0" Background="Transparent" BorderThickness="0" BorderBrush="Transparent">
             <StatusBarItem>
-                <TextBlock x:Name="StatusFfmpeg" Text="ffmpeg：未检测" Style="{StaticResource HintText}" />
+                <TextBlock Text="ffmpeg：" Style="{StaticResource HintText}" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Text="{Binding FfmpegStatus}" Style="{StaticResource HintText}" MaxWidth="420" TextTrimming="CharacterEllipsis" />
             </StatusBarItem>
             <Separator />
             <StatusBarItem>
-                <TextBlock x:Name="StatusQueue" Text="队列：空闲" Style="{StaticResource HintText}" />
+                <TextBlock Text="{Binding ProbeStatus}" Style="{StaticResource HintText}" Foreground="{StaticResource AccentBrush}" />
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Text="{Binding QueueStatus}" Style="{StaticResource HintText}" />
+            </StatusBarItem>
+            <StatusBarItem>
                 <TextBlock x:Name="StatusVersion" Text="v1.0.0" Style="{StaticResource HintText}" />
             </StatusBarItem>
         </StatusBar>

@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using MediaCraft.Logging;
-using MediaCraft.Settings;
+using MediaCraft.ViewModels;
 
 namespace MediaCraft;
 
@@ -16,20 +16,15 @@ public partial class MainWindow : Window
 {
     private const int MaxLogLines = 2000;
 
-    private readonly SettingsService _settings;
     private readonly ObservableCollection<LogEntry> _logEntries = [];
 
-    public MainWindow(SettingsService settings)
+    public MainWindow(MainViewModel viewModel)
     {
-        _settings = settings;
         InitializeComponent();
 
+        DataContext = viewModel;
         LogList.ItemsSource = _logEntries;
         StatusVersion.Text = "v" + (typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.0");
-        if (_settings.Current.StartMaximized)
-        {
-            WindowState = WindowState.Maximized;
-        }
 
         foreach (var entry in AppLog.Snapshot())
         {
@@ -42,12 +37,6 @@ public partial class MainWindow : Window
 
     /// <summary>关窗时的二次确认钩子，返回 true 表示允许关闭。</summary>
     public Func<bool>? ConfirmClose { get; set; }
-
-    /// <summary>窗口标题右侧的状态文本（ffmpeg 探测结果）。</summary>
-    public void SetFfmpegStatus(string text) => StatusFfmpeg.Text = "ffmpeg：" + text;
-
-    /// <summary>队列状态文本。</summary>
-    public void SetQueueStatus(string text) => StatusQueue.Text = "队列：" + text;
 
     /// <summary>让主窗口获得焦点（单实例唤起时使用）。</summary>
     public void BringToFront()

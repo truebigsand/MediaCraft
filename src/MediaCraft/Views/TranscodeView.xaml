@@ -1,0 +1,540 @@
+<UserControl x:Class="MediaCraft.Views.TranscodeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:MediaCraft.ViewModels"
+             AllowDrop="True"
+             DragOver="OnDragOver"
+             Drop="OnDrop">
+
+    <UserControl.Resources>
+        <!-- 编码器按 硬件 / 软件 分组 -->
+        <CollectionViewSource x:Key="EncoderView" Source="{Binding Encoders}">
+            <CollectionViewSource.GroupDescriptions>
+                <PropertyGroupDescription PropertyName="GroupName" />
+            </CollectionViewSource.GroupDescriptions>
+        </CollectionViewSource>
+    </UserControl.Resources>
+
+    <Grid Margin="0,8,0,0">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" MinWidth="420" />
+            <ColumnDefinition Width="8" />
+            <ColumnDefinition Width="470" MinWidth="360" />
+        </Grid.ColumnDefinitions>
+
+        <!-- ═══════════════════════ 左：文件列表 ═══════════════════════ -->
+        <Grid Grid.Column="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" Style="{StaticResource CardBorder}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Left" Text="文件列表" Style="{StaticResource SectionTitle}" Margin="0" VerticalAlignment="Center" />
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="添加文件" Style="{StaticResource SecondaryButton}" Click="OnAddFilesClick" Margin="0,0,6,0" />
+                        <Button Content="添加文件夹" Style="{StaticResource SecondaryButton}" Click="OnAddFolderClick" Margin="0,0,6,0" />
+                        <Button Content="移除" Style="{StaticResource SecondaryButton}" Command="{Binding RemoveSelectedCommand}" CommandParameter="{Binding SelectedFile}" Margin="0,0,6,0" />
+                        <Button Content="清空" Style="{StaticResource DangerButton}" Command="{Binding ClearFilesCommand}" />
+                    </StackPanel>
+                    <TextBlock Text="" />
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Row="1" Style="{StaticResource CardBorder}" Padding="0">
+                <Grid>
+                    <ListView x:Name="FileList"
+                              ItemsSource="{Binding Files}"
+                              SelectionMode="Extended"
+                              SelectedItem="{Binding SelectedFile, Mode=TwoWay}"
+                              BorderThickness="0"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="文件名" Width="180">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding State}" Value="Analyzing">
+                                                                <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="分辨率" Width="80" DisplayMemberBinding="{Binding Resolution}" />
+                                <GridViewColumn Header="时长" Width="56" DisplayMemberBinding="{Binding Duration}" />
+                                <GridViewColumn Header="帧率" Width="58" DisplayMemberBinding="{Binding FrameRate}" />
+                                <GridViewColumn Header="大小" Width="68" DisplayMemberBinding="{Binding SizeText}" />
+                                <GridViewColumn Header="视频" Width="96" DisplayMemberBinding="{Binding VideoCodec}" />
+                                <GridViewColumn Header="音频" Width="96" DisplayMemberBinding="{Binding AudioText}" />
+                                <GridViewColumn Header="字幕" Width="48" DisplayMemberBinding="{Binding SubtitleText}" />
+                                <GridViewColumn Header="参数" Width="160" DisplayMemberBinding="{Binding ParametersSummary}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <TextBlock Text="把视频 / 音频 / 字幕文件或整个文件夹拖到这里&#x0a;（文件夹会递归扫描）"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               TextAlignment="Center"
+                               IsHitTestVisible="False"
+                               Foreground="{StaticResource FaintBrush}"
+                               Visibility="{Binding Files, Converter={StaticResource EmptyToVis}}" />
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="2" Style="{StaticResource CardBorder}">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button Content="加入队列（选中）" Style="{StaticResource SecondaryButton}" Click="OnEnqueueSelectedClick" Margin="0,0,6,0" />
+                        <Button Content="全部加入队列" Style="{StaticResource PrimaryButton}" Click="OnEnqueueAllClick" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding StatusText}" Style="{StaticResource HintText}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </DockPanel>
+            </Border>
+        </Grid>
+
+        <!-- ═══════════════════════ 右：参数区 ═══════════════════════ -->
+        <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
+            <StackPanel>
+
+                <!-- ── 视频 ── -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="视频" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{Binding EditTargetText}" Style="{StaticResource HintText}" Margin="0,0,0,6" />
+
+                        <TextBlock Text="处理方式" Style="{StaticResource FieldLabel}" Margin="0,0,0,2" />
+                        <ComboBox ItemsSource="{x:Static vm:Options.VideoModes}"
+                                  DisplayMemberPath="Name"
+                                  SelectedValuePath="Value"
+                                  SelectedValue="{Binding Params.VideoMode, Mode=TwoWay}" />
+
+                        <StackPanel Visibility="{Binding Params.VideoMode, Converter={StaticResource EnumToVis}, ConverterParameter=Encode}">
+                            <TextBlock Text="编码器" Style="{StaticResource FieldLabel}" Margin="0,8,0,2" />
+                            <ComboBox ItemsSource="{Binding Source={StaticResource EncoderView}}"
+                                      DisplayMemberPath="DisplayName"
+                                      SelectedValuePath="Id"
+                                      SelectedValue="{Binding Params.EncoderId, Mode=TwoWay}">
+                                <ComboBox.GroupStyle>
+                                    <GroupStyle>
+                                        <GroupStyle.HeaderTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="2,4,0,2" />
+                                            </DataTemplate>
+                                        </GroupStyle.HeaderTemplate>
+                                    </GroupStyle>
+                                </ComboBox.GroupStyle>
+                            </ComboBox>
+                            <TextBlock Text="{Binding EncoderHint}" Style="{StaticResource HintText}" Margin="0,3,0,0" />
+
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,4">
+                                <RadioButton Content="简单（一个滑块）" Margin="0,0,14,0"
+                                             IsChecked="{Binding Params.QualityMode, Converter={StaticResource EnumToBool}, ConverterParameter=Simple}" />
+                                <RadioButton Content="高级（原生参数）"
+                                             IsChecked="{Binding Params.QualityMode, Converter={StaticResource EnumToBool}, ConverterParameter=Advanced}" />
+                            </StackPanel>
+
+                            <!-- 简单模式 -->
+                            <StackPanel Visibility="{Binding IsSimpleMode, Converter={StaticResource BoolToVis}}">
+                                <Slider Minimum="0" Maximum="100"
+                                        Value="{Binding Params.QualitySlider, Mode=TwoWay}"
+                                        TickFrequency="5" IsSnapToTickEnabled="False" Margin="0,0,0,2" />
+                                <TextBlock Text="{Binding QualityHint}" Style="{StaticResource HintText}" />
+                            </StackPanel>
+
+                            <!-- 高级模式 -->
+                            <StackPanel Visibility="{Binding IsAdvancedMode, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="码率控制" Style="{StaticResource FieldLabel}" Margin="0,0,0,2" />
+                                <ComboBox ItemsSource="{x:Static vm:Options.RateControls}"
+                                          DisplayMemberPath="Name"
+                                          SelectedValuePath="Value"
+                                          SelectedValue="{Binding Params.RateControl, Mode=TwoWay}" />
+
+                                <StackPanel Visibility="{Binding IsQualityRateControl, Converter={StaticResource BoolToVis}}" Margin="0,6,0,0">
+                                    <TextBlock Text="{Binding QualityLabelText}" Style="{StaticResource HintText}" />
+                                    <TextBox Text="{Binding Params.QualityValue, Mode=TwoWay}" Margin="0,2,0,0" />
+                                </StackPanel>
+
+                                <Grid Visibility="{Binding IsQualityRateControl, Converter={StaticResource InverseBoolToVis}}" Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="6" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="6" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="目标码率 kbps" Style="{StaticResource HintText}" />
+                                        <TextBox Text="{Binding Params.BitrateKbps, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="maxrate（0=不设）" Style="{StaticResource HintText}" />
+                                        <TextBox Text="{Binding Params.MaxrateKbps, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="bufsize（0=不设）" Style="{StaticResource HintText}" />
+                                        <TextBox Text="{Binding Params.BufsizeKbps, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="6" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="preset（编码速度）" Style="{StaticResource HintText}" />
+                                        <ComboBox ItemsSource="{Binding AvailablePresets}" SelectedItem="{Binding Params.Preset, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="tune（内容类型）" Style="{StaticResource HintText}" />
+                                        <ComboBox ItemsSource="{Binding AvailableTunes}" SelectedItem="{Binding Params.Tune, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="6" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="6" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="profile" Style="{StaticResource HintText}" />
+                                        <ComboBox ItemsSource="{Binding AvailableProfiles}" SelectedItem="{Binding Params.Profile, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="level" Style="{StaticResource HintText}" />
+                                        <TextBox Text="{Binding Params.Level, Mode=TwoWay}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="GOP（0=自动）" Style="{StaticResource HintText}" />
+                                        <TextBox Text="{Binding Params.Gop, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock Text="像素格式（留空=自动）" Style="{StaticResource HintText}" Margin="0,8,0,2" />
+                                <TextBox Text="{Binding Params.PixelFormat, Mode=TwoWay}" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- 分辨率与帧率 -->
+                        <StackPanel Visibility="{Binding Params.VideoMode, Converter={StaticResource EnumToVis}, ConverterParameter=Encode}">
+                            <TextBlock Text="分辨率" Style="{StaticResource FieldLabel}" Margin="0,10,0,2" />
+                            <ComboBox ItemsSource="{x:Static vm:Options.ScaleModes}"
+                                      DisplayMemberPath="Name"
+                                      SelectedValuePath="Value"
+                                      SelectedValue="{Binding Params.ScaleMode, Mode=TwoWay}" />
+
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="6" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Visibility="{Binding Params.ScaleMode, Converter={StaticResource EnumToVis}, ConverterParameter=Width}">
+                                    <TextBlock Text="宽度（像素）" Style="{StaticResource HintText}" />
+                                    <ComboBox IsEditable="True" ItemsSource="{Binding CommonWidths}" Text="{Binding Params.ScaleWidth, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="0" Visibility="{Binding Params.ScaleMode, Converter={StaticResource EnumToVis}, ConverterParameter=Height}">
+                                    <TextBlock Text="高度（像素）" Style="{StaticResource HintText}" />
+                                    <ComboBox IsEditable="True" ItemsSource="{Binding CommonHeights}" Text="{Binding Params.ScaleHeight, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="0" Grid.ColumnSpan="3" Visibility="{Binding Params.ScaleMode, Converter={StaticResource EnumToVis}, ConverterParameter=Fit}">
+                                    <TextBlock Text="框内最大尺寸（宽 × 高）" Style="{StaticResource HintText}" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <ComboBox IsEditable="True" Width="100" ItemsSource="{Binding CommonWidths}" Text="{Binding Params.ScaleWidth, Mode=TwoWay}" />
+                                        <TextBlock Text=" × " VerticalAlignment="Center" />
+                                        <ComboBox IsEditable="True" Width="100" ItemsSource="{Binding CommonHeights}" Text="{Binding Params.ScaleHeight, Mode=TwoWay}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBlock Text="帧率（留空=保持源帧率）" Style="{StaticResource FieldLabel}" Margin="0,8,0,2" />
+                            <ComboBox IsEditable="True" ItemsSource="{Binding FrameRatePresets}" Text="{Binding Params.FrameRate, Mode=TwoWay}" />
+                        </StackPanel>
+
+                        <TextBlock Text="硬件解码" Style="{StaticResource FieldLabel}" Margin="0,10,0,2" />
+                        <ComboBox ItemsSource="{x:Static vm:Options.HwAccelOptions}"
+                                  DisplayMemberPath="Name"
+                                  SelectedValuePath="Value"
+                                  SelectedValue="{Binding Params.HwAccel, Mode=TwoWay}" />
+                        <TextBlock Text="选了显卡编码器就会自动配对应硬解；遇到烧字幕等软件滤镜时会自动回读到内存（否则滤镜链会因显存帧格式报错）。"
+                                   Style="{StaticResource HintText}" Margin="0,3,0,0" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── 输出 ── -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="输出" Style="{StaticResource SectionTitle}" />
+
+                        <TextBlock Text="容器格式" Style="{StaticResource FieldLabel}" Margin="0,0,0,2" />
+                        <ComboBox ItemsSource="{Binding Containers}"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="Extension"
+                                  SelectedValue="{Binding Params.Container, Mode=TwoWay}" />
+
+                        <TextBlock Text="文件名模板" Style="{StaticResource FieldLabel}" Margin="0,8,0,2" />
+                        <TextBox Text="{Binding Params.NamingTemplate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="{x:Static vm:Options.NamingTemplateHint}" Style="{StaticResource HintText}" Margin="0,2,0,0" />
+
+                        <TextBlock Text="输出目录（留空=源文件所在目录）" Style="{StaticResource FieldLabel}" Margin="0,8,0,2" />
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="浏览" Style="{StaticResource SecondaryButton}" Click="OnPickOutputDirectoryClick" Margin="6,0,0,0" />
+                            <TextBox Text="{Binding Params.OutputDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        </DockPanel>
+
+                        <CheckBox Content="允许覆盖同名文件（默认自动加序号，绝不覆盖源文件）"
+                                  IsChecked="{Binding Params.AllowOverwrite, Mode=TwoWay}" Margin="0,8,0,0" />
+                        <CheckBox Content="MP4/MOV 添加 +faststart（网页秒开）"
+                                  IsChecked="{Binding Params.FastStart, Mode=TwoWay}" Margin="0,4,0,0" />
+
+                        <TextBlock Text="预计输出路径" Style="{StaticResource FieldLabel}" Margin="0,8,0,2" />
+                        <TextBlock Text="{Binding OutputPreview}" Style="{StaticResource MonoText}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── 音频 ── -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="音频" Style="{StaticResource SectionTitle}" />
+
+                        <TextBlock Text="选中文件后显示它的音轨；默认全部直通（-c:a copy）"
+                                   Style="{StaticResource HintText}"
+                                   Visibility="{Binding Params.AudioTracks, Converter={StaticResource EmptyToVis}}" />
+
+                        <ItemsControl ItemsSource="{Binding Params.AudioTracks}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,0,1" Padding="0,5">
+                                        <StackPanel>
+                                            <DockPanel>
+                                                <CheckBox DockPanel.Dock="Left" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,0,6,0" />
+                                                <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                            </DockPanel>
+                                            <Grid Margin="20,4,0,0"
+                                                  Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="132" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <ComboBox Grid.Column="0"
+                                                          ItemsSource="{x:Static vm:Options.AudioActions}"
+                                                          DisplayMemberPath="Name"
+                                                          SelectedValuePath="Value"
+                                                          SelectedValue="{Binding Action, Mode=TwoWay}" />
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="6,0,0,0"
+                                                            Visibility="{Binding Action, Converter={StaticResource EnumToVis}, ConverterParameter=Encode}">
+                                                    <ComboBox Width="150"
+                                                              ItemsSource="{Binding DataContext.AudioCodecs, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                              DisplayMemberPath="DisplayName"
+                                                              SelectedValuePath="Id"
+                                                              SelectedValue="{Binding CodecId, Mode=TwoWay}" />
+                                                    <TextBox Width="62" Margin="6,0,0,0" Text="{Binding BitRateKbps, Mode=TwoWay}" ToolTip="码率 kbps" />
+                                                    <TextBlock Text="kbps" VerticalAlignment="Center" Margin="4,0,0,0" Style="{StaticResource HintText}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!-- ── 字幕 ── -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="字幕" Style="{StaticResource SectionTitle}" />
+
+                        <TextBlock Text="选中文件后显示它的字幕轨"
+                                   Style="{StaticResource HintText}"
+                                   Visibility="{Binding Params.SubtitleTracks, Converter={StaticResource EmptyToVis}}" />
+
+                        <ItemsControl ItemsSource="{Binding Params.SubtitleTracks}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,0,1" Padding="0,5">
+                                        <StackPanel>
+                                            <DockPanel>
+                                                <CheckBox DockPanel.Dock="Left" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="0,0,6,0" />
+                                                <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                            </DockPanel>
+                                            <Grid Margin="20,4,0,0"
+                                                  Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="132" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <ComboBox Grid.Column="0"
+                                                          ItemsSource="{x:Static vm:Options.SubtitleActions}"
+                                                          DisplayMemberPath="Name"
+                                                          SelectedValuePath="Value"
+                                                          SelectedValue="{Binding Action, Mode=TwoWay}" />
+                                                <ComboBox Grid.Column="1" Width="90" Margin="6,0,0,0"
+                                                          ItemsSource="{x:Static vm:Options.SubtitleFormats}"
+                                                          DisplayMemberPath="Name"
+                                                          SelectedValuePath="Value"
+                                                          SelectedValue="{Binding ExtractFormat, Mode=TwoWay}"
+                                                          Visibility="{Binding Action, Converter={StaticResource EnumToVis}, ConverterParameter=Extract}" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Text="外挂字幕（设置后优先烧入它）" Style="{StaticResource FieldLabel}" Margin="0,10,0,2" />
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="选择" Style="{StaticResource SecondaryButton}" Command="{Binding PickExternalSubtitleCommand}" Margin="6,0,0,0" />
+                            <Button DockPanel.Dock="Right" Content="清除" Style="{StaticResource SecondaryButton}" Command="{Binding ClearExternalSubtitleCommand}" Margin="6,0,0,0" />
+                            <TextBox Text="{Binding Params.ExternalSubtitlePath, Mode=OneWay}" IsReadOnly="True" Foreground="{StaticResource MutedBrush}" />
+                        </DockPanel>
+
+                        <CheckBox Content="展开字幕样式设置" x:Name="StyleToggle" Margin="0,10,0,0" IsChecked="False" />
+
+                        <StackPanel Visibility="{Binding IsChecked, ElementName=StyleToggle, Converter={StaticResource BoolToVis}}">
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="6" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="6" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="字体" Style="{StaticResource HintText}" />
+                                    <ComboBox IsEditable="True" ItemsSource="{x:Static vm:Options.CommonFonts}" Text="{Binding Params.SubtitleStyle.FontName, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="字号" Style="{StaticResource HintText}" />
+                                    <TextBox Text="{Binding Params.SubtitleStyle.FontSize, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="描边宽度" Style="{StaticResource HintText}" />
+                                    <TextBox Text="{Binding Params.SubtitleStyle.OutlineWidth, Mode=TwoWay}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="6" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="6" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="字色（#RRGGBB）" Style="{StaticResource HintText}" />
+                                    <TextBox Text="{Binding Params.SubtitleStyle.PrimaryColor, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="描边色" Style="{StaticResource HintText}" />
+                                    <TextBox Text="{Binding Params.SubtitleStyle.OutlineColor, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="底边距" Style="{StaticResource HintText}" />
+                                    <TextBox Text="{Binding Params.SubtitleStyle.MarginVertical, Mode=TwoWay}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="6" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="位置" Style="{StaticResource HintText}" />
+                                    <ComboBox ItemsSource="{x:Static vm:Options.SubtitleAlignments}"
+                                              DisplayMemberPath="Name"
+                                              SelectedValuePath="Value"
+                                              SelectedValue="{Binding Params.SubtitleStyle.Alignment, Mode=TwoWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" VerticalAlignment="Bottom">
+                                    <CheckBox Content="加粗" IsChecked="{Binding Params.SubtitleStyle.Bold, Mode=TwoWay}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBlock Text="字号是 ASS 画布（默认 288 高）里的单位：24 约等于画面高度的 8%。"
+                                       Style="{StaticResource HintText}" Margin="0,6,0,0" />
+                        </StackPanel>
+
+                        <TextBlock Text="字幕格式转换（输入本身就是 .srt/.ass/.vtt 时生效）" Style="{StaticResource FieldLabel}" Margin="0,10,0,2" />
+                        <ComboBox ItemsSource="{x:Static vm:Options.SubtitleFormats}"
+                                  DisplayMemberPath="Name"
+                                  SelectedValuePath="Value"
+                                  SelectedValue="{Binding Params.SubtitleConvertFormat, Mode=TwoWay}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── 附加参数 ── -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="附加 ffmpeg 参数" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="会原样追加到命令行末尾（高级用法，出错请先清空这里）" Style="{StaticResource HintText}" Margin="0,0,0,4" />
+                        <TextBox Text="{Binding Params.ExtraArguments, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 AcceptsReturn="False" FontFamily="Consolas, Cascadia Mono, Courier New" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── 预检 ── -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Text="预检" Style="{StaticResource SectionTitle}" Margin="0" />
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding PreflightSummary}" HorizontalAlignment="Right" Style="{StaticResource HintText}" VerticalAlignment="Center" />
+                            <TextBlock Text="" />
+                        </DockPanel>
+
+                        <TextBlock Text="开跑前会拦下已知会翻车的组合，能自动修的直接修掉并在这里列出。"
+                                   Style="{StaticResource HintText}" Margin="0,0,0,4" />
+
+                        <ItemsControl ItemsSource="{Binding PreflightIssues}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,3,0,0">
+                                        <TextBlock Text="{Binding DisplayText}" TextWrapping="Wrap" FontSize="11.5">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Severity}" Value="Warning">
+                                                            <Setter Property="Foreground" Value="{StaticResource WarnBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Severity}" Value="Error">
+                                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

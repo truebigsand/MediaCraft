@@ -103,6 +103,9 @@ public static class AppLog
         Write(LogLevel.Error, text, context);
     }
 
+    /// <summary>按指定级别写入（供需要动态决定级别的调用方使用）。</summary>
+    public static void Log(LogLevel level, string message, string context = "") => Write(level, message, context);
+
     /// <summary>当前内存中的日志快照（最多 <see cref="MemoryCapacity"/> 条，按时间升序）。</summary>
     public static IReadOnlyList<LogEntry> Snapshot()
     {

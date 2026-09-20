@@ -7,6 +7,10 @@
     <ui:NotNullToVisibilityConverter x:Key="NotNullToVis" />
     <ui:NullToVisibilityConverter x:Key="NullToVis" />
     <ui:EnumToBoolConverter x:Key="EnumToBool" />
+    <ui:EnumToVisibilityConverter x:Key="EnumToVis" />
+    <ui:CollectionEmptyToVisibilityConverter x:Key="EmptyToVis" />
+    <ui:PositiveNumberToVisibilityConverter x:Key="PositiveToVis" />
+    <BooleanToVisibilityConverter x:Key="BoolToVis" />
 
     <!-- ═══════════════════ 调色板（视觉基线取自 TrayToolTemplate / AudioDispatcher / WlanHook）═══ -->
     <SolidColorBrush x:Key="PageBrush" Color="#FFF5F6F8" />
