@@ -207,11 +207,6 @@ public sealed partial class QueueViewModel : ObservableObject
         RefreshSummary();
     }
 
-    public void ClearFinishedJobs()
-    {
-        _queue.ClearFinished();
-        RefreshSummary();
-    }
 
     private void OnQueueChanged()
     {

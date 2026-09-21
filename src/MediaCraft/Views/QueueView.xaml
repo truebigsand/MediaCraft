@@ -82,7 +82,6 @@
                             <MenuItem Header="打开输出位置" Click="OnOpenOutputClick" />
                             <Separator />
                             <MenuItem Header="从队列移除" Click="OnRemoveContextJobClick" />
-                            <MenuItem Header="清空已完成" Click="OnClearFinishedJobsClick" />
                         </ContextMenu>
                     </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>

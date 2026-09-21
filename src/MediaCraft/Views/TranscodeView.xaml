@@ -67,7 +67,6 @@
                                 <MenuItem Header="用默认程序打开" Click="OnOpenFileClick" />
                                 <Separator />
                                 <MenuItem Header="移除" Click="OnRemoveContextFileClick" />
-                                <MenuItem Header="清空列表" Click="OnClearFilesClick" />
                             </ContextMenu>
                         </ListView.ContextMenu>
                         <ListView.View>

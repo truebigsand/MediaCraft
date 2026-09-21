@@ -114,8 +114,6 @@ public partial class QueueView : UserControl
         }
     }
 
-    private void OnClearFinishedJobsClick(object sender, RoutedEventArgs e) => ViewModel?.ClearFinishedJobs();
-
     private void OnCopySourcePathClick(object sender, RoutedEventArgs e)
     {
         var path = ContextJob?.SourcePath;

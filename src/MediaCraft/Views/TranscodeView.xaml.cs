@@ -205,8 +205,6 @@ public partial class TranscodeView : UserControl
         _contextFile = null;
     }
 
-    private void OnClearFilesClick(object sender, RoutedEventArgs e) => ViewModel?.ClearFilesCommand.Execute(null);
-
     private void CopyToClipboard(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
