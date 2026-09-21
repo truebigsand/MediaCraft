@@ -226,41 +226,60 @@ public static class EncoderCatalog
         },
     ];
 
-    /// <summary>支持的输出容器。</summary>
+    /// <summary>
+    /// 支持的输出容器。
+    ///
+    /// ⚠ 下面的「容器 × 编码」列表**全部来自本机 ffmpeg 实测**，不是按经验写的。
+    /// 曾经手写的表把 `pcm_s24le` 在 MP4 里判成非法，于是预检把用户的无损 PCM 直通
+    /// 强行改成有损 AAC 192k —— 用户既丢了画质又没法阻止，比报错还糟。
+    /// 现在这张表由自检里的「容器兼容性矩阵」用例用真实 ffmpeg 逐个探测守住
+    /// （见 SelfTest.VerifyContainerMatrixAsync），表与实测不一致就会失败。
+    /// </summary>
     public static IReadOnlyList<ContainerDefinition> Containers { get; } =
     [
         new ContainerDefinition
         {
             Extension = "mp4", DisplayName = "MP4（兼容性最好）",
-            VideoCodecs = ["h264", "hevc", "av1", "mpeg4"],
-            AudioCodecs = ["aac", "libmp3lame", "ac3", "libopus", "alac"],
+            VideoCodecs = ["h264", "hevc", "av1", "vp9", "mpeg4"],
+            AudioCodecs =
+            [
+                "aac", "libopus", "libmp3lame", "ac3", "flac", "libvorbis", "alac", "pcm_s16le", "pcm_s24le",
+            ],
+            // 实测：MP4/MOV 只认 mov_text（srt/ass/webvtt 都会 "not supported"）
             SubtitleCodecs = ["mov_text"],
         },
         new ContainerDefinition
         {
             Extension = "mkv", DisplayName = "MKV（什么都能装）",
             VideoCodecs = ["h264", "hevc", "av1", "vp9", "mpeg4"],
-            AudioCodecs = ["aac", "libmp3lame", "ac3", "libopus", "flac", "libvorbis", "pcm_s16le", "alac"],
-            SubtitleCodecs = ["subrip", "ass", "webvtt", "mov_text", "copy"],
+            AudioCodecs =
+            [
+                "aac", "libopus", "libmp3lame", "ac3", "flac", "libvorbis", "alac", "pcm_s16le", "pcm_s24le",
+            ],
+            // 实测：matroska 不支持 mov_text，所以这里没有它；copy 表示原样内封（PGS 等图形字幕也能装）
+            SubtitleCodecs = ["subrip", "ass", "webvtt", "copy"],
         },
         new ContainerDefinition
         {
             Extension = "mov", DisplayName = "MOV（苹果生态）",
-            VideoCodecs = ["h264", "hevc"],
-            AudioCodecs = ["aac", "libmp3lame", "ac3", "alac", "pcm_s16le"],
+            // 实测报错：「av1 only supported in MP4 and AVIF」
+            VideoCodecs = ["h264", "hevc", "mpeg4"],
+            // 实测：libopus 与 flac 装不进 mov；PCM 可以
+            AudioCodecs = ["aac", "libmp3lame", "ac3", "libvorbis", "alac", "pcm_s16le", "pcm_s24le"],
             SubtitleCodecs = ["mov_text"],
         },
         new ContainerDefinition
         {
             Extension = "webm", DisplayName = "WebM（网页内嵌）",
             VideoCodecs = ["vp9", "av1"],
+            // 实测报错：「Only VP8 or VP9 or AV1 video and Vorbis or Opus audio and WebVTT subtitles」
             AudioCodecs = ["libopus", "libvorbis"],
             SubtitleCodecs = ["webvtt"],
         },
         new ContainerDefinition
         {
             Extension = "m4a", DisplayName = "M4A（纯音频）", VideoCapable = false,
-            AudioCodecs = ["aac", "alac"],
+            AudioCodecs = ["aac", "ac3", "alac"],
         },
         new ContainerDefinition
         {
@@ -270,7 +289,7 @@ public static class EncoderCatalog
         new ContainerDefinition
         {
             Extension = "opus", DisplayName = "OPUS（纯音频）", VideoCapable = false,
-            AudioCodecs = ["libopus"],
+            AudioCodecs = ["libopus", "flac", "libvorbis"],
         },
         new ContainerDefinition
         {
@@ -280,7 +299,7 @@ public static class EncoderCatalog
         new ContainerDefinition
         {
             Extension = "wav", DisplayName = "WAV（未压缩音频）", VideoCapable = false,
-            AudioCodecs = ["pcm_s16le", "pcm_s24le"],
+            AudioCodecs = ["aac", "libmp3lame", "ac3", "flac", "libvorbis", "pcm_s16le", "pcm_s24le"],
         },
     ];
 

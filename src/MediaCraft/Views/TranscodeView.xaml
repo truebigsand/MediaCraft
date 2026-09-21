@@ -407,6 +407,12 @@
                                                     <TextBlock Text="kbps" VerticalAlignment="Center" Margin="4,0,0,0" Style="{StaticResource HintText}" />
                                                 </StackPanel>
                                             </Grid>
+                                            <TextBlock Text="{Binding PreflightNote}"
+                                                       Foreground="{StaticResource WarnBrush}"
+                                                       FontSize="11"
+                                                       TextWrapping="Wrap"
+                                                       Margin="20,3,0,0"
+                                                       Visibility="{Binding PreflightNote, Converter={StaticResource NotNullToVis}}" />
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>
@@ -451,6 +457,12 @@
                                                           SelectedValue="{Binding ExtractFormat, Mode=TwoWay}"
                                                           Visibility="{Binding Action, Converter={StaticResource EnumToVis}, ConverterParameter=Extract}" />
                                             </Grid>
+                                            <TextBlock Text="{Binding PreflightNote}"
+                                                       Foreground="{StaticResource WarnBrush}"
+                                                       FontSize="11"
+                                                       TextWrapping="Wrap"
+                                                       Margin="20,3,0,0"
+                                                       Visibility="{Binding PreflightNote, Converter={StaticResource NotNullToVis}}" />
                                         </StackPanel>
                                     </Border>
                                 </DataTemplate>

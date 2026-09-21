@@ -33,6 +33,9 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
     private bool _suppressRevalidate;
 
+    /// <summary>正在把预检修正写回参数（防止写回触发的属性变更再次进入预检）。</summary>
+    private bool _applyingPreflightFix;
+
     public TranscodeViewModel(FfmpegContext ffmpeg, SettingsService settings, TranscodeQueue queue, PresetStore presets)
     {
         _ffmpeg = ffmpeg;
@@ -673,10 +676,25 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
         try
         {
-            var outputPath = OutputPathBuilder.Build(info, Params, _settings.Current.DefaultOutputDirectory);
-            OutputPreview = outputPath;
+            // 轨道上的「预检已调整…」说明只在刚发生修正后有意义，
+            // 每次预检先清空，避免改了容器之后留下过期提示。
+            ClearTrackPreflightNotes();
 
+            var outputPath = OutputPathBuilder.Build(info, Params, _settings.Current.DefaultOutputDirectory);
             var result = PreflightValidator.Validate(info, Params, _ffmpeg.Capabilities, outputPath);
+
+            // 把预检的自动修正**写回正在编辑的参数**。
+            // 否则界面会自相矛盾：预检卡片写「已自动处理：音频 #1 已改为重编码 aac」，
+            // 而上面的音频板块仍显示「直通」——执行时用的是修正后的版本，用户看到的却不是它。
+            // 不变式：参数面板显示的东西 == 实际会执行的东西。
+            if (!_applyingPreflightFix && !Params.ContentEquals(result.Effective))
+            {
+                ApplyPreflightFixes(result);
+                outputPath = OutputPathBuilder.Build(info, Params, _settings.Current.DefaultOutputDirectory);
+                result = PreflightValidator.Validate(info, Params, _ffmpeg.Capabilities, outputPath);
+            }
+
+            OutputPreview = outputPath;
             PreflightIssues.Clear();
             foreach (var issue in result.Issues)
             {
@@ -693,6 +711,102 @@ public sealed partial class TranscodeViewModel : ObservableObject
             HasBlockingError = true;
         }
     }
+
+    /// <summary>
+    /// 把预检的修正搬回参数，并在被改动的轨道上留下原因说明。
+    /// 轨道按位置搬运：Effective 与当前参数是同源副本，轨道数量与顺序一致。
+    /// </summary>
+    private void ApplyPreflightFixes(PreflightResult result)
+    {
+        _applyingPreflightFix = true;
+        try
+        {
+            var container = Params.ContainerDefinition;
+
+            // 先逐条比对，写清楚「哪条轨被改成了什么、为什么」
+            for (var index = 0; index < Params.AudioTracks.Count && index < result.Effective.AudioTracks.Count; index++)
+            {
+                var before = Params.AudioTracks[index];
+                var after = result.Effective.AudioTracks[index];
+
+                if (before.Action == after.Action &&
+                    string.Equals(before.CodecId, after.CodecId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var reason = after.Action == AudioActionKind.Encode &&
+                             !EncoderCatalog.IsAudioCodecCompatible(before.SourceCodec, container)
+                    ? $"{container.Extension.ToUpperInvariant()} 装不下 {before.SourceCodec}"
+                    : "与容器不兼容";
+
+                before.PreflightNote =
+                    $"预检已调整：{DescribeAudioAction(before)} → {DescribeAudioAction(after)}（{reason}）";
+            }
+
+            for (var index = 0; index < Params.SubtitleTracks.Count && index < result.Effective.SubtitleTracks.Count; index++)
+            {
+                var before = Params.SubtitleTracks[index];
+                var after = result.Effective.SubtitleTracks[index];
+
+                if (before.Action == after.Action)
+                {
+                    continue;
+                }
+
+                var reason = after.Action == SubtitleActionKind.Drop
+                    ? $"{container.Extension.ToUpperInvariant()} 不支持 {before.SourceCodec} 字幕"
+                    : "与容器不兼容";
+
+                before.PreflightNote =
+                    $"预检已调整：{DescribeSubtitleAction(before)} → {DescribeSubtitleAction(after)}（{reason}）";
+            }
+
+            Params.CopyScalarsFrom(result.Effective);
+            Params.ApplyTracksFrom(result.Effective);
+            Params.OutputDirectory = result.Effective.OutputDirectory;
+
+            SelectedFile?.RefreshSummary();
+            PropagateToAllIfNeeded();
+
+            AppLog.Info(
+                $"预检自动调整了参数并已同步到参数面板（{result.Issues.Count(i => i.WasFixed)} 处修正）",
+                "Transcode");
+        }
+        finally
+        {
+            _applyingPreflightFix = false;
+        }
+    }
+
+    /// <summary>清空所有轨道上的预检说明。</summary>
+    private void ClearTrackPreflightNotes()
+    {
+        foreach (var track in Params.AudioTracks)
+        {
+            track.PreflightNote = string.Empty;
+        }
+
+        foreach (var track in Params.SubtitleTracks)
+        {
+            track.PreflightNote = string.Empty;
+        }
+    }
+
+    private static string DescribeAudioAction(AudioTrackParams track) => track.Action switch
+    {
+        AudioActionKind.Copy => "直通",
+        AudioActionKind.Encode => $"重编码 {track.CodecId}",
+        _ => "丢弃",
+    };
+
+    private static string DescribeSubtitleAction(SubtitleTrackParams track) => track.Action switch
+    {
+        SubtitleActionKind.Copy => "内封保留",
+        SubtitleActionKind.Burn => "烧入画面",
+        SubtitleActionKind.Extract => "提取为文件",
+        _ => "丢弃",
+    };
 
     private void ScheduleRevalidate()
     {

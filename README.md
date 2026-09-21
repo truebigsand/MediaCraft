@@ -99,7 +99,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-fd.ps1
 ## 5. 自检
 
 ```powershell
-# 完整自检：真跑 34 项（11 个编码器矩阵、硬解、缩放、烧字幕、提取、预检拦截、预设逻辑…）
+# 完整自检：真跑 36 项（容器兼容性矩阵 117 个组合、11 个编码器、硬解、缩放、烧字幕、提取、预检、预设逻辑…）
 .\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest all "$env:TEMP\report.txt"
 
 # 快速自检：只做定位 → 能力探测 → 编码器功能探测 → 生成测试素材（约 15 秒）
@@ -110,6 +110,8 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-fd.ps1
 ```
 
 退出码 0 = 全部通过。图形界面里也有「设置 → 运行快速自检」按钮，跑完自动打开报告。
+
+其中「容器兼容性矩阵」用例会把 117 个「容器 × 编码」组合逐个真跑一遍，校验代码里的兼容性表与 ffmpeg 实际行为一致——这张表曾经写错，把合法的 PCM-in-MP4 判成非法并因此强制重编码，代价是用户丢画质，所以现在由自检守住。
 **换一台机器想确认哪些编码器能用，跑一次快速自检即可。**
 
 ---

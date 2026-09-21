@@ -307,6 +307,30 @@ public static class PreflightValidator
             }
         }
 
+        // ── 8b. PCM 直通到 MP4/MOV 的兼容性提示 ──
+        // ffmpeg 实测允许这样写（muxer 接受），但相当多硬件播放器/电视不认 PCM-in-MP4。
+        // 这属于兼容性提醒而不是硬限制，所以只提示、绝不改动用户的直通选择
+        //（曾经因为表写错而把用户的 PCM 直通强行改成 AAC，那是不可接受的损失）。
+        if (container.Extension is "mp4" or "mov")
+        {
+            var pcmTracks = effective.AudioTracks
+                .Where(t => t.IsSelected && t.Action == AudioActionKind.Copy &&
+                            t.SourceCodec.StartsWith("pcm_", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+            if (pcmTracks.Length > 0)
+            {
+                issues.Add(new PreflightIssue
+                {
+                    Severity = IssueSeverity.Info,
+                    Title = "PCM 直通装在 MP4/MOV 里兼容性有限",
+                    Detail = $"{pcmTracks.Length} 条音轨直通的是 " +
+                             string.Join("、", pcmTracks.Select(t => t.SourceCodec).Distinct()) +
+                             "；ffmpeg 能写，但部分硬件播放器/电视不认。需要广泛兼容可用「手机友好 720p」预设，或改输出 MKV",
+                });
+            }
+        }
+
         // ── 9. 字幕内封兼容性 ──
         foreach (var track in effective.SubtitleTracks.Where(t =>
                      t.IsSelected && t.Action == SubtitleActionKind.Copy).ToArray())

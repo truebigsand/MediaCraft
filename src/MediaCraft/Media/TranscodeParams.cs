@@ -147,6 +147,14 @@ public sealed partial class AudioTrackParams : ObservableObject
     [ObservableProperty]
     private int _targetChannels;
 
+    /// <summary>
+    /// 预检自动调整过这条轨时的原因说明（界面显示用，不进持久化）。
+    /// 存在的意义：预检的自动修正会写回参数，用户必须能看见「为什么变了」。
+    /// </summary>
+    [ObservableProperty]
+    [property: JsonIgnore]
+    private string _preflightNote = string.Empty;
+
     public AudioTrackParams Clone() => new()
     {
         StreamIndex = StreamIndex,
@@ -194,6 +202,11 @@ public sealed partial class SubtitleTrackParams : ObservableObject
 
     [ObservableProperty]
     private SubtitleFormat _extractFormat = SubtitleFormat.Srt;
+
+    /// <summary>预检自动调整过这条轨时的原因说明（界面显示用，不进持久化）。</summary>
+    [ObservableProperty]
+    [property: JsonIgnore]
+    private string _preflightNote = string.Empty;
 
     public SubtitleTrackParams Clone() => new()
     {
@@ -530,6 +543,18 @@ public sealed partial class TranscodeParams : ObservableObject
             target.Action = origin.Action;
             target.ExtractFormat = origin.ExtractFormat;
         }
+    }
+
+    /// <summary>
+    /// 内容是否完全一致（含轨道与字幕样式）。
+    /// 用于「预检的自动修正是否需要写回参数」——写回的前提是确实有差异，
+    /// 否则每次预检都会触发一轮无意义的属性变更。
+    /// </summary>
+    public bool ContentEquals(TranscodeParams other)
+    {
+        var self = JsonSerializer.Serialize(this, CloneOptions);
+        var target = JsonSerializer.Serialize(other, CloneOptions);
+        return string.Equals(self, target, StringComparison.Ordinal);
     }
 
     /// <summary>新文件是否应跟随当前参数（模板模式）。</summary>

@@ -309,6 +309,22 @@ public static class SelfTest
             }
             else
             {
+                // ── 4b. 容器兼容性矩阵：用真实 ffmpeg 逐个探测，校验 EncoderCatalog 里的表 ──
+                Write(string.Empty);
+                Write("[4b] 容器兼容性矩阵校验（逐个组合真跑一次）");
+                var matrixCase = await VerifyContainerMatrixAsync(paths, workDirectory).ConfigureAwait(false);
+                results.Add(matrixCase);
+                Write($"  {(matrixCase.Passed ? "✓ PASS" : "✗ FAIL")}  {matrixCase.Name}");
+                foreach (var detail in matrixCase.Details)
+                {
+                    Write($"          {detail}");
+                }
+
+                foreach (var failure in matrixCase.Failures)
+                {
+                    Write($"          ! {failure}");
+                }
+
                 Write(string.Empty);
                 Write("[5] 转码矩阵（每项都真跑，并用 ffprobe 校验产出）");
 
@@ -356,6 +372,180 @@ public static class SelfTest
         WriteReport(reportPath, report);
         Console.WriteLine($"报告已写入：{reportPath}");
         return passed == results.Count && results.Count > 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// 用真实 ffmpeg 逐个探测「容器 × 编码」组合，校验 <see cref="EncoderCatalog"/> 里的兼容性表。
+    ///
+    /// 为什么必须有这条：这张表曾经是手写的，把 `pcm_s24le` 在 MP4 里判成非法，
+    /// 于是预检把用户的**无损 PCM 直通强行改成有损 AAC 192k**——用户既丢了画质又无法阻止，
+    /// 比直接报错还糟。表必须由实测守住，而不是靠记忆和推测。
+    /// </summary>
+    private static async Task<CaseResult> VerifyContainerMatrixAsync(FfmpegPaths paths, string workDirectory)
+    {
+        var result = new CaseResult { Name = "容器兼容性矩阵与 ffmpeg 实测一致" };
+        var probeDirectory = Path.Combine(workDirectory, "matrix");
+        Directory.CreateDirectory(probeDirectory);
+
+        var subtitleFile = Path.Combine(probeDirectory, "probe.srt");
+        var subtitleText = "1" + Environment.NewLine +
+            "00:00:00,100 --> 00:00:00,200" + Environment.NewLine +
+            "test" + Environment.NewLine;
+        await File.WriteAllTextAsync(subtitleFile, subtitleText).ConfigureAwait(false);
+
+        // 兼容性表里写的是「编码格式」，探测要用具体编码器
+        var videoEncoders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["h264"] = "libx264",
+            ["hevc"] = "libx265",
+            ["av1"] = "libsvtav1",
+            ["vp9"] = "libvpx-vp9",
+            ["mpeg4"] = "mpeg4",
+        };
+
+        // 注意两套命名：表里用 ffprobe 的 codec_name（运行时拿 track.SourceCodec 比对），
+        // 探测要用 ffmpeg 的编码器名。srt 与 subrip 是同一个东西的两种叫法。
+        var subtitleCodecs = new[]
+        {
+            (TableName: "subrip", Encoder: "srt"),
+            (TableName: "ass", Encoder: "ass"),
+            (TableName: "webvtt", Encoder: "webvtt"),
+            (TableName: "mov_text", Encoder: "mov_text"),
+        };
+
+        var probes = new List<(string Label, bool Claimed, string[] Arguments)>();
+
+        foreach (var container in EncoderCatalog.Containers)
+        {
+            var muxer = MuxerName(container.Extension);
+
+            if (container.VideoCapable)
+            {
+                foreach (var (codec, encoder) in videoEncoders)
+                {
+                    probes.Add((
+                        $"视频 {codec} → {container.Extension}",
+                        EncoderCatalog.IsVideoCodecCompatible(codec, container),
+                        [
+                            "-y", "-v", "error",
+                            "-f", "lavfi", "-i", "testsrc2=s=128x128:r=5", "-t", "0.2",
+                            "-c:v", encoder,
+                            "-f", muxer, Path.Combine(probeDirectory, $"v-{container.Extension}"),
+                        ]));
+                }
+            }
+
+            foreach (var codec in EncoderCatalog.AudioCodecs)
+            {
+                probes.Add((
+                    $"音频 {codec.Id} → {container.Extension}",
+                    EncoderCatalog.IsAudioCodecCompatible(codec.Id, container),
+                    [
+                        "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "0.2",
+                        "-c:a", codec.Id,
+                        "-f", muxer, Path.Combine(probeDirectory, $"a-{container.Extension}"),
+                    ]));
+            }
+
+            if (container.SubtitleCodecs.Length == 0)
+            {
+                continue;
+            }
+
+            foreach (var codec in subtitleCodecs)
+            {
+                // 断言只看**显式列出**的编码器；表里的 "copy" 是策略（原样内封）而不是某个编码器，无法逐个探测
+                probes.Add((
+                    $"字幕 {codec.TableName}（编码器 {codec.Encoder}）→ {container.Extension}",
+                    container.SubtitleCodecs.Contains(codec.TableName, StringComparer.OrdinalIgnoreCase),
+                    [
+                        "-y", "-v", "error",
+                        "-i", subtitleFile,
+                        "-c:s", codec.Encoder,
+                        "-f", muxer, Path.Combine(probeDirectory, $"s-{container.Extension}"),
+                    ]));
+            }
+        }
+
+        var mismatches = new List<string>();
+        var gate = new SemaphoreSlim(4);
+        var agreements = 0;
+
+        var tasks = probes.Select(async probe =>
+        {
+            await gate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var run = await ProcessRunner
+                    .RunAsync(paths.Ffmpeg, probe.Arguments, CancellationToken.None, 60000)
+                    .ConfigureAwait(false);
+
+                var measured = run.Succeeded;
+                if (measured == probe.Claimed)
+                {
+                    Interlocked.Increment(ref agreements);
+                    return;
+                }
+
+                var reason = measured ? "ffmpeg 实际支持，但表里没有" : "表里说支持，但 ffmpeg 拒绝";
+                var detail = measured ? string.Empty : FirstLine(run.StandardError);
+                lock (mismatches)
+                {
+                    mismatches.Add($"{probe.Label}：{reason}" + (detail.Length > 0 ? $"（{detail}）" : string.Empty));
+                }
+            }
+            finally
+            {
+                gate.Release();
+                TryDeleteFirstOutput(probe.Arguments);
+            }
+        });
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        result.Details.Add($"共探测 {probes.Count} 个「容器 × 编码」组合，与表一致 {agreements} 个");
+        if (mismatches.Count > 0)
+        {
+            foreach (var mismatch in mismatches.Take(20))
+            {
+                result.Failures.Add(mismatch);
+            }
+
+            if (mismatches.Count > 20)
+            {
+                result.Failures.Add($"……另有 {mismatches.Count - 20} 项不一致未列出");
+            }
+        }
+
+        result.Passed = result.Failures.Count == 0;
+        return result;
+    }
+
+    /// <summary>扩展名 → ffmpeg 复用器名。</summary>
+    private static string MuxerName(string extension) => extension switch
+    {
+        "mp4" => "mp4",
+        "mkv" => "matroska",
+        "mov" => "mov",
+        "webm" => "webm",
+        "m4a" => "ipod",
+        "mp3" => "mp3",
+        "opus" => "ogg",
+        "flac" => "flac",
+        "wav" => "wav",
+        _ => extension,
+    };
+
+    /// <summary>删掉探测输出的临时文件（参数数组的最后一项就是输出路径）。</summary>
+    private static void TryDeleteFirstOutput(string[] arguments)
+    {
+        if (arguments.Length == 0)
+        {
+            return;
+        }
+
+        TryDelete(arguments[^1]);
     }
 
     /// <summary>
