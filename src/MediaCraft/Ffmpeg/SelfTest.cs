@@ -383,7 +383,7 @@ public static class SelfTest
                 }
 
                 Write(string.Empty);
-                Write("[4c] 两遍编码支持情况校验（逐编码器看统计文件是否真有内容）");
+                Write("[4c] 多遍编码支持情况校验（统计文件 / 参数是否被使用）");
                 var twoPassCase = await VerifyTwoPassSupportAsync(paths, workDirectory).ConfigureAwait(false);
                 results.Add(twoPassCase);
                 Write($"  {(twoPassCase.Passed ? "✓ PASS" : "✗ FAIL")}  {twoPassCase.Name}");
@@ -1040,15 +1040,16 @@ public static class SelfTest
     }
 
     /// <summary>
-    /// 逐编码器实测两遍编码支持情况，与 <see cref="EncoderDefinition.SupportsTwoPass"/> 比对。
+    /// 逐编码器实测多遍编码能力，与表里的 <see cref="EncoderDefinition.TwoPassKind"/> 比对。
     ///
-    /// 必须实测的原因：硬件编码器对 -pass **不报错也不写统计文件**（实测 0 字节），
-    /// 命令返回成功 —— 靠「命令成功」判断会得出「支持」的错误结论，用户会以为做了两遍而实际没有。
-    /// 判定标准是统计文件里真的有内容。
+    /// 判定标准按机制区分，都不能用「命令是否成功」：
+    /// - ffmpeg 两遍：第一遍的统计文件里有没有内容（硬件编码器会写出 0 字节文件且不报错）
+    /// - 编码器内部多遍：ffmpeg 是否把这些参数标记为「未被任何流使用」
+    /// - 无：把两族的代表参数（-multipass / -extbrc）都试一遍，必须都被标记为未使用
     /// </summary>
     private static async Task<CaseResult> VerifyTwoPassSupportAsync(FfmpegPaths paths, string workDirectory)
     {
-        var result = new CaseResult { Name = "两遍编码支持情况与实测一致" };
+        var result = new CaseResult { Name = "多遍编码支持情况与实测一致" };
         var probeDirectory = Path.Combine(workDirectory, "twopass");
         Directory.CreateDirectory(probeDirectory);
 
@@ -1083,45 +1084,91 @@ public static class SelfTest
 
             var extra = encoder.Family switch
             {
-                EncoderFamily.SvtAv1 => new[] { "-preset", "10" },
+                // svtav1 用 preset 8：实测 preset 10 在 160x120 这类极小分辨率下会随机段错误
+                //（上游边界问题，720p / 640x360 正常），探测不必踩这个边界
+                EncoderFamily.SvtAv1 => new[] { "-preset", "8" },
                 EncoderFamily.Aom => new[] { "-cpu-used", "8" },
                 _ => [],
             };
 
-            var probe = await ProcessRunner.RunAsync(
-                paths.Ffmpeg,
-                [
-                    "-y", "-v", "error",
-                    "-i", input,
-                    "-c:v", encoder.Id,
-                    "-b:v", "200k",
-                    .. extra,
-                    "-pass", "1", "-passlogfile", prefix,
-                    "-an", "-f", "null", "-",
-                ],
-                CancellationToken.None,
-                120000).ConfigureAwait(false);
+            bool measured;
+            string measuredText;
 
-            // 关键：看统计文件里有没有内容，而不是看退出码
-            var statsPath = prefix + "-0.log";
-            var statsBytes = File.Exists(statsPath) ? new FileInfo(statsPath).Length : 0;
-            var measured = statsBytes > 0;
+            if (encoder.TwoPassKind == TwoPassKind.ExternalPass)
+            {
+                var probe = await ProcessRunner.RunAsync(
+                    paths.Ffmpeg,
+                    [
+                        "-y", "-v", "error",
+                        "-i", input,
+                        "-c:v", encoder.Id,
+                        "-b:v", "200k",
+                        .. extra,
+                        "-pass", "1", "-passlogfile", prefix,
+                        "-an", "-f", "null", "-",
+                    ],
+                    CancellationToken.None,
+                    120000).ConfigureAwait(false);
 
-            if (measured == encoder.SupportsTwoPass)
+                // 关键：看统计文件里有没有内容，而不是看退出码
+                var statsPath = prefix + "-0.log";
+                var statsBytes = File.Exists(statsPath) ? new FileInfo(statsPath).Length : 0;
+                measured = statsBytes > 0;
+                measuredText = $"统计文件 {statsBytes} 字节（退出码 {probe.ExitCode}）";
+            }
+            else
+            {
+                // 内部多遍：检查 ffmpeg 是否报告「参数未被使用」
+                var candidates = encoder.TwoPassKind == TwoPassKind.EncoderInternal
+                    ? encoder.TwoPassArguments
+                    : ["-multipass", "2", "-extbrc", "1"];
+
+                var probe = await ProcessRunner.RunAsync(
+                    paths.Ffmpeg,
+                    [
+                        "-y", "-v", "warning",
+                        "-i", input,
+                        "-c:v", encoder.Id,
+                        "-b:v", "200k",
+                        .. extra,
+                        .. candidates,
+                        "-an", "-f", "null", "-",
+                    ],
+                    CancellationToken.None,
+                    120000).ConfigureAwait(false);
+
+                var ignored = probe.StandardError.Contains("has not been used for any stream", StringComparison.Ordinal);
+
+                // 「参数被使用」= 该编码器确实有内部多遍；被忽略 = 没有这份能力。
+                // 注意 None 类编码器的预期结果就是被忽略，不能把「忽略」当成不一致。
+                measured = !ignored;
+                measuredText = ignored
+                    ? encoder.TwoPassKind == TwoPassKind.None
+                        ? "参数被忽略（与表一致）"
+                        : $"参数被标记为未使用（{string.Join(" ", candidates)}）"
+                    : "参数被使用";
+            }
+
+            if (measured == (encoder.TwoPassKind != TwoPassKind.None))
             {
                 agreements++;
             }
             else
             {
                 mismatches.Add(
-                    $"{encoder.Id}：表里写 {(encoder.SupportsTwoPass ? "支持" : "不支持")}，" +
-                    $"实测统计文件 {statsBytes} 字节（退出码 {probe.ExitCode}）");
+                    $"{encoder.Id}：表里写 {encoder.TwoPassKind}，实测 {measuredText}");
             }
         }
 
         result.Details.Add($"探测 {EncoderCatalog.All.Count} 个编码器，与表一致 {agreements} 个");
-        result.Details.Add(
-            "支持的：" + string.Join("、", EncoderCatalog.All.Where(e => e.SupportsTwoPass).Select(e => e.Id)));
+        foreach (var kind in new[] { TwoPassKind.ExternalPass, TwoPassKind.EncoderInternal, TwoPassKind.None })
+        {
+            result.Details.Add(
+                $"{kind}：" + string.Join("、",
+                    EncoderCatalog.All.Where(e => e.TwoPassKind == kind)
+                        .Select(e => e.Id + (e.TwoPassArguments.Length > 0 ? $"（{string.Join(" ", e.TwoPassArguments)}）" : string.Empty))));
+        }
+
         foreach (var mismatch in mismatches)
         {
             result.Failures.Add(mismatch);
@@ -1351,7 +1398,7 @@ public static class SelfTest
 
         // ── 两遍编码：应拆成「第一遍分析 + 第二遍编码」两步 ──
         Add(
-            "两遍编码 · x264 目标码率（两步且主步骤带 -pass 2）",
+            "多遍编码 · x264 目标码率（两步且主步骤带 -pass 2）",
             Base(p =>
             {
                 p.EncoderId = "libx264";
@@ -1367,6 +1414,26 @@ public static class SelfTest
                 ContainerExtension = "mp4",
                 ExpectStepCount = 2,
                 RequireArguments = ["-pass", "2"],
+            });
+
+        // ── 编码器内部多遍：nvenc 用 -multipass，单次调用（应为 1 步）──
+        Add(
+            "多遍编码 · NVENC 内部多遍（单步 + -multipass 2）",
+            Base(p =>
+            {
+                p.EncoderId = "h264_nvenc";
+                p.QualityMode = QualityMode.Advanced;
+                p.RateControl = RateControlKind.Bitrate;
+                p.BitrateKbps = 800;
+                p.TwoPass = true;
+            }),
+            new Expectation
+            {
+                CodecName = "h264",
+                ContainerExtension = "mp4",
+                ExpectStepCount = 1,
+                RequireArguments = ["-multipass", "2"],
+                ForbidArguments = ["-pass"],
             });
 
         // ── opus 直通：若编码名归一化出错，预检会强行重编码，输出音轨会变成 aac ──

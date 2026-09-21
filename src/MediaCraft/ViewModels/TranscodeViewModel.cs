@@ -116,8 +116,10 @@ public sealed partial class TranscodeViewModel : ObservableObject
     [ObservableProperty]
     private string _encoderHint = string.Empty;
 
-    /// <summary>当前编码器是否支持两遍编码（界面据此决定选项是否可勾选）。</summary>
-    public bool CanUseTwoPass => Params.Encoder.SupportsTwoPass;
+    /// <summary>当前编码器在当前模式下是否可用多遍编码（界面据此决定选项是否可勾选）。</summary>
+    public bool CanUseTwoPass =>
+        Params.Encoder.TwoPassKind != TwoPassKind.None
+        && (!Params.Encoder.TwoPassRequiresBitrate || Params.RateControl == RateControlKind.Bitrate);
 
     /// <summary>
     /// 两遍编码的说明文字：按当前编码器推导，而不是只在「预检修正」那一刻写一次
@@ -620,10 +622,16 @@ public sealed partial class TranscodeViewModel : ObservableObject
         EncoderHint = Options.EncoderHint(encoder);
         OnPropertyChanged(nameof(CanUseTwoPass));
 
-        TwoPassHint = encoder.SupportsTwoPass
-            ? "第一遍只做分析并写统计文件，第二遍按统计结果编码；需要配合目标码率使用。"
-            : $"当前编码器（{encoder.Id}）不支持两遍编码：ffmpeg 会忽略 -pass，既不报错也不写统计文件。" +
-              "软件编码器 x264 / x265 / SVT-AV1 / AOM 支持。";
+        TwoPassHint = encoder.TwoPassKind switch
+        {
+            TwoPassKind.ExternalPass =>
+                "分两次调用：第一遍只做分析并写出统计文件，第二遍按统计结果编码；耗时约为单遍的两倍，需要配合目标码率。",
+            TwoPassKind.EncoderInternal when encoder.TwoPassRequiresBitrate =>
+                $"由编码器在本次编码内完成多遍分析（{string.Join(" ", encoder.TwoPassArguments)}），仅在目标码率模式下有效。",
+            TwoPassKind.EncoderInternal =>
+                $"由编码器在本次编码内完成多遍分析（{string.Join(" ", encoder.TwoPassArguments)}），不会多读一遍文件。",
+            _ => $"当前编码器（{encoder.Id}）没有可用的多遍分析选项。",
+        };
         QualityLabelText = $"{encoder.QualityLabel}（范围 {encoder.QualityMin}-{encoder.QualityMax}，越小越清晰）";
 
         if (Params.VideoMode != VideoMode.Encode)

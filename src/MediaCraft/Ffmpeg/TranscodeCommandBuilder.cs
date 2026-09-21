@@ -374,27 +374,35 @@ public static class TranscodeCommandBuilder
             }
         }
 
-        // ── 两遍编码 ──
-        // 判定条件与预检规则一致：必须显式选了目标码率，且编码器真的支持
-        //（实测硬件编码器会把 -pass 静默忽略，只有软件编码器会写出统计文件）。
+        // ── 多遍编码 ──
+        // 三种机制的实测结论见 EncoderDefinition.TwoPassKind：软件编码器走 ffmpeg 两遍
+        //（分两次调用 + 统计文件），nvenc/qsv 走编码器内部多遍（单次调用）。
         var twoPass = parameters.TwoPass
-                      && parameters.RateControl == RateControlKind.Bitrate
-                      && encoder.SupportsTwoPass
+                      && encoder.TwoPassKind != TwoPassKind.None
+                      && (!encoder.TwoPassRequiresBitrate || parameters.RateControl == RateControlKind.Bitrate)
                       && videoReencode;
 
-        // 两遍共用同一个统计文件前缀（ffmpeg 会自行追加 -0.log）
+        // ffmpeg 两遍共用同一个统计文件前缀（ffmpeg 会自行追加 -0.log）
         string? passLogPrefix = null;
 
         if (twoPass)
         {
-            passLogPrefix = Path.Combine(
-                tempDirectory,
-                "pass-" + Path.GetFileNameWithoutExtension(outputPath));
+            var insertAt = videoArgumentsStart + videoArguments.Count;
 
-            // 第二遍：按第一遍的统计结果编码
-            arguments.InsertRange(
-                videoArgumentsStart + videoArguments.Count,
-                ["-pass", "2", "-passlogfile", passLogPrefix]);
+            if (encoder.TwoPassKind == TwoPassKind.EncoderInternal)
+            {
+                // 编码器内部多遍：单次调用，直接把编码器参数接在视频参数之后
+                arguments.InsertRange(insertAt, encoder.TwoPassArguments);
+            }
+            else
+            {
+                passLogPrefix = Path.Combine(
+                    tempDirectory,
+                    "pass-" + Path.GetFileNameWithoutExtension(outputPath));
+
+                // 第二遍：按第一遍的统计结果编码
+                arguments.InsertRange(insertAt, ["-pass", "2", "-passlogfile", passLogPrefix]);
+            }
         }
 
         // ── 音频编码（按输出序号，逐个指定，避免多轨互相干扰）──
@@ -467,13 +475,14 @@ public static class TranscodeCommandBuilder
         {
             // 第一遍：只做分析并写统计文件，不产出视频（-f null）。
             // 滤镜链与编码参数必须与第二遍一致，否则统计结果对不上。
+            var prefix = passLogPrefix!;
             var passOne = new List<string>(inputArguments);
             passOne.AddRange(["-map", "0:" + videoStreamIndex]);
             passOne.AddRange(videoArguments);
             passOne.AddRange(
             [
                 "-pass", "1",
-                "-passlogfile", passLogPrefix,
+                "-passlogfile", prefix,
                 "-an",
                 "-f", "null", "-",
             ]);
@@ -493,7 +502,7 @@ public static class TranscodeCommandBuilder
         {
             Kind = TranscodeStepKind.Transcode,
             Label = twoPass
-                ? "第二遍编码"
+                ? (encoder.TwoPassKind == TwoPassKind.EncoderInternal ? "转码（多遍分析）" : "第二遍编码")
                 : parameters.VideoMode switch
                 {
                     VideoMode.Drop => "提取音频",

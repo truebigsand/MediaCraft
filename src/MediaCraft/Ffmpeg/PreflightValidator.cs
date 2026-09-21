@@ -333,31 +333,34 @@ public static class PreflightValidator
             }
         }
 
-        // ── 7c. 两遍编码的前置条件 ──
-        // 实测：硬件编码器（nvenc/qsv）对 -pass 不报错但也不写统计文件，等于静默没做两遍；
-        // 质量优先模式下第二遍会直接失败。两种情况都关闭该选项并说明。
+        // ── 7c. 多遍编码的前置条件 ──
+        // 三种机制都由实测确定：ffmpeg 两遍只对软件编码器有效（硬件编码器统计文件为 0 字节）；
+        // nvenc 的 -multipass 两种模式都有实测差别；qsv 的 -extbrc 仅在目标码率模式下有效。
         if (effective.TwoPass)
         {
-            if (!encoder.SupportsTwoPass)
+            if (encoder.TwoPassKind == TwoPassKind.None)
             {
                 effective.TwoPass = false;
                 issues.Add(new PreflightIssue
                 {
                     Severity = IssueSeverity.Warning,
-                    Title = "该编码器不支持两遍编码",
-                    Detail = $"{encoder.Id} 会忽略 -pass（实测统计文件为 0 字节，命令却返回成功）",
-                    AppliedFix = "已关闭两遍编码",
+                    Title = "该编码器没有可用的多遍分析",
+                    Detail = $"{encoder.Id} 既无 ffmpeg 两遍支持（实测统计文件为 0 字节），" +
+                             "其内部多遍参数实测也无效或被忽略",
+                    AppliedFix = "已关闭多遍编码",
                 });
             }
-            else if (effective.RateControl != RateControlKind.Bitrate)
+            else if (encoder.TwoPassRequiresBitrate && effective.RateControl != RateControlKind.Bitrate)
             {
                 effective.TwoPass = false;
                 issues.Add(new PreflightIssue
                 {
                     Severity = IssueSeverity.Warning,
-                    Title = "两遍编码需要目标码率",
-                    Detail = "质量优先（CRF/CQ）模式下第二遍会直接失败（实测退出码非 0）",
-                    AppliedFix = "已关闭两遍编码",
+                    Title = "该多遍机制需要目标码率",
+                    Detail = encoder.TwoPassKind == TwoPassKind.ExternalPass
+                        ? "ffmpeg 两遍编码在质量优先模式下第二遍会直接失败（实测退出码非 0）"
+                        : $"实测 {string.Join(" ", encoder.TwoPassArguments)} 在质量模式下产出字节与不传时相同（无效果）",
+                    AppliedFix = "已关闭多遍编码",
                 });
             }
         }
