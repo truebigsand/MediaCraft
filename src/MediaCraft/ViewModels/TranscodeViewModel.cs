@@ -849,7 +849,11 @@ public sealed partial class TranscodeViewModel : ObservableObject
         if (bitDepth > 0 && effectiveRate > 0 && effectiveChannels > 0)
         {
             var kbps = EncoderCatalog.ComputePcmBitrate(effectiveRate, bitDepth, effectiveChannels);
-            return $"无损未压缩：{bitDepth}bit · {effectiveChannels}ch · {effectiveRate} Hz → {kbps} kbps（{scope}）";
+
+            // 未压缩 PCM 体积非常大（几分钟就上 GB），直接把「每分钟多少 MB」算给用户看
+            var mbPerMinute = kbps * 60.0 / 8 / 1024;
+            return $"无损未压缩：{bitDepth}bit · {effectiveChannels}ch · {effectiveRate} Hz → {kbps} kbps" +
+                   $"（约 {mbPerMinute:0.#} MB/分钟，{scope}）";
         }
 
         return "无损压缩：体积取决于内容（一般约为未压缩 PCM 的 50-70%），没有码率参数可设";
