@@ -110,8 +110,7 @@ dotnet build MediaCraft.slnx -c Debug
 dotnet run --project src/MediaCraft/MediaCraft.csproj
 
 # 也可以直接带文件或文件夹启动（并支持资源管理器「打开方式」）
-.\src\MediaCraftin\Debug
-et10.0-windows\MediaCraft.exe "D:ideos" "E:\片子.mkv"
+.\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe "D:\videos" "E:\片子.mkv"
 ```
 
 发布两种形态：
@@ -131,16 +130,13 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-fd.ps1
 
 ```powershell
 # 完整自检：真跑 44 项，含 135 个容器×编码组合的兼容性矩阵
-.\src\MediaCraftin\Debug
-et10.0-windows\MediaCraft.exe --selftest all "$env:TEMPeport.txt"
+.\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest all "$env:TEMP\report.txt"
 
 # 快速自检：定位、能力探测、编码器功能探测、生成测试素材（约 15 秒）
-.\src\MediaCraftin\Debug
-et10.0-windows\MediaCraft.exe --selftest quick "$env:TEMPeport.txt"
+.\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest quick "$env:TEMP\report.txt"
 
 # 纯逻辑自检：只跑预设、参数与命名规则，不需要 ffmpeg（CI 用这个）
-.\src\MediaCraftin\Debug
-et10.0-windows\MediaCraft.exe --selftest logic "$env:TEMPeport.txt"
+.\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest logic "$env:TEMP\report.txt"
 ```
 
 退出码 0 表示全部通过。图形界面里也有「设置 → 运行快速自检」，跑完自动打开报告。
@@ -183,7 +179,7 @@ src/MediaCraft/
 | 设置 | `%AppData%\MediaCraft\settings.json` |
 | 预设 | `%AppData%\MediaCraft\presets.json` |
 | 队列 | `%AppData%\MediaCraft\queue.json` |
-| 日志 | `%AppData%\MediaCraft\logspp-yyyyMMdd.log`（保留 7 天） |
+| 日志 | `%AppData%\MediaCraft\logs\app-yyyyMMdd.log`（保留 7 天） |
 
 ## 已知限制
 
