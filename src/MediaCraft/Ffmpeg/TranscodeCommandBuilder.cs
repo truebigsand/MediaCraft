@@ -124,7 +124,8 @@ public static class TranscodeCommandBuilder
             effectiveAccel,
             outputPath,
             burnSource.Path,
-            tempDirectory));
+            tempDirectory,
+            plan.Notes));
 
         if (burnSource.Note is not null)
         {
@@ -266,7 +267,8 @@ public static class TranscodeCommandBuilder
         HwAccelKind effectiveAccel,
         string outputPath,
         string? burnSubtitlePath,
-        string tempDirectory)
+        string tempDirectory,
+        List<string> notes)
     {
         var container = parameters.ContainerDefinition;
         var videoReencode = parameters.VideoMode == VideoMode.Encode && info.HasVideo;
@@ -275,6 +277,11 @@ public static class TranscodeCommandBuilder
         var filterChain = videoReencode
             ? FilterBuilder.Build(info, parameters, encoder, effectiveAccel, burnSubtitlePath)
             : new FilterChainResult { Filter = null, HasSoftwareFilter = false, IsGpuOnly = false };
+
+        foreach (var note in filterChain.Notes)
+        {
+            notes.Add(note);
+        }
 
         var useGpuFrames = videoReencode
             && effectiveAccel is HwAccelKind.Cuda or HwAccelKind.Qsv

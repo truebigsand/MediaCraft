@@ -468,6 +468,18 @@ public static class PreflightValidator
                     Detail = "源是 HDR（PQ/HLG），本工具不转色调映射，输出到 SDR 设备上画面可能发灰",
                 });
             }
+
+            var yuv420Filter = EncoderCatalog.BuildYuv420ConversionFilter(encoder, info.VideoStream, effective.PixelFormat);
+            if (yuv420Filter is not null)
+            {
+                var target = yuv420Filter.Replace("format=", string.Empty, StringComparison.Ordinal);
+                issues.Add(new PreflightIssue
+                {
+                    Severity = IssueSeverity.Info,
+                    Title = "会自动转换成 4:2:0",
+                    Detail = $"{encoder.DisplayName} 只接受 4:2:0 输入，源是 {info.VideoStream?.PixelFormat}，已插入 {target} 转换（色度采样减半）",
+                });
+            }
         }
 
         // ── 11. 帧率 ──

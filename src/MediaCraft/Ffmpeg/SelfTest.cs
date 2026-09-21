@@ -113,6 +113,9 @@ public static class SelfTest
         /// <summary>opus 音轨素材（用于验证编码名归一化，避免把可直通的音轨误判为不兼容）。</summary>
         public required string OpusAudioPath { get; init; }
 
+        /// <summary>4:2:2 10bit 素材（av1_nvenc 只接受 4:2:0，用来验证自动格式转换）。</summary>
+        public required string Yuv422Path { get; init; }
+
         public required FfmpegPaths Paths { get; init; }
 
         public required FfmpegCapabilities Capabilities { get; init; }
@@ -269,6 +272,7 @@ public static class SelfTest
             var subtitleOnlyPath = Path.Combine(workDirectory, "待转换.srt");
             var threeAudioPath = Path.Combine(workDirectory, "sample-3audio.mkv");
             var opusAudioPath = Path.Combine(workDirectory, "sample-opus.mkv");
+            var yuv422Path = Path.Combine(workDirectory, "sample-422-10bit.mkv");
 
             var sampleOk = await FfmpegAsync(paths,
                 "-y", "-v", "error",
@@ -324,6 +328,17 @@ public static class SelfTest
                 opusAudioPath).ConfigureAwait(false);
             Write($"  sample-opus.mkv（视频 + opus 音轨）: {(opusOk.Ok ? "✓" : "✗ " + FirstLine(opusOk.Output))}");
 
+            // 4:2:2 10bit 源 + PCM 音轨：验证 av1_nvenc 的 4:2:0 转换与 PCM 在 mp4 里的直通
+            var yuv422Ok = await FfmpegAsync(paths,
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc2=s=320x180:r=10",
+                "-f", "lavfi", "-i", "sine=f=440",
+                "-t", "2",
+                "-c:v", "ffv1", "-pix_fmt", "yuv422p10le",
+                "-c:a", "pcm_s16le",
+                yuv422Path).ConfigureAwait(false);
+            Write($"  sample-422-10bit.mkv（4:2:2 10bit 视频 + PCM 音轨）: {(yuv422Ok.Ok ? "✓" : "✗ " + FirstLine(yuv422Ok.Output))}");
+
             if (!sampleOk.Ok || !muxOk.Ok)
             {
                 Write("  ✗ 素材生成失败，终止。");
@@ -354,6 +369,7 @@ public static class SelfTest
                 SubtitleOnlyPath = subtitleOnlyPath,
                 ThreeAudioPath = threeAudioPath,
                 OpusAudioPath = opusAudioPath,
+                Yuv422Path = yuv422Path,
                 Paths = paths,
                 Capabilities = capabilities,
             };
@@ -928,13 +944,36 @@ public static class SelfTest
         // ── 7. 音频编码器元数据（无损标记 / 固定档位 / PCM 码率公式）──
         var audioCase = new CaseResult { Name = "音频 · 编码器元数据与 PCM 码率公式" };
 
-        foreach (var id in new[] { "flac", "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le" })
+        foreach (var id in new[]
+                 {
+                     "flac", "alac",
+                     "pcm_s16le", "pcm_s24le", "pcm_s32le",
+                     "pcm_s16be", "pcm_s24be", "pcm_f32le", "pcm_f64le",
+                 })
         {
             if (!EncoderCatalog.GetAudioCodec(id).IsLossless)
             {
                 audioCase.Failures.Add($"{id} 应标记为无损（实测 -b:a 对它无效）");
             }
         }
+
+        // PCM 位深解析（码率说明与体积估算都依赖它；浮点格式按容器位宽）
+        foreach (var (id, depth) in new[]
+                 {
+                     ("pcm_s16le", 16), ("pcm_s16be", 16),
+                     ("pcm_s24le", 24), ("pcm_s24be", 24),
+                     ("pcm_s32le", 32), ("pcm_f32le", 32),
+                     ("pcm_f64le", 64), ("aac", 0),
+                 })
+        {
+            var got = AudioCodecDefinition.PcmBitDepth(id);
+            if (got != depth)
+            {
+                audioCase.Failures.Add($"{id} 的位深解析不符：得到 {got}，应为 {depth}");
+            }
+        }
+
+        audioCase.Details.Add("PCM 家族（le/be/f32/f64）位深解析与无损标记一致");
 
         foreach (var id in new[] { "aac", "libopus", "libmp3lame", "ac3", "libvorbis" })
         {
@@ -1035,6 +1074,83 @@ public static class SelfTest
 
         namingCase.Passed = namingCase.Failures.Count == 0;
         results.Add(namingCase);
+
+        // ── 9. 4:2:0 输入约束（实测：av1_nvenc 编 4:2:2 / 4:4:4 源直接失败）──
+        var yuv420Case = new CaseResult { Name = "视频 · 4:2:0 输入约束与转换判定" };
+
+        var av1Nvenc = EncoderCatalog.Get("av1_nvenc");
+        if (!av1Nvenc.NeedsYuv420Input)
+        {
+            yuv420Case.Failures.Add("av1_nvenc 应标记为只接受 4:2:0 输入");
+        }
+
+        foreach (var (encoderId, needsYuv420) in new[]
+                 {
+                     ("av1_nvenc", true), ("hevc_nvenc", false), ("h264_nvenc", false),
+                     ("hevc_qsv", false), ("av1_qsv", false),
+                     ("libx264", false), ("libsvtav1", false),
+                 })
+        {
+            var encoder = EncoderCatalog.Get(encoderId);
+            if (encoder.NeedsYuv420Input != needsYuv420)
+            {
+                yuv420Case.Failures.Add(
+                    $"{encoderId} 的 NeedsYuv420Input 应为 {needsYuv420}（实测除 av1_nvenc 外都能直接吃 4:2:2）");
+            }
+        }
+
+        // 源格式 → 期望插入的滤镜（null = 不需要转换）
+        foreach (var (source, expected) in new (string Source, string? Expected)[]
+                 {
+                     ("yuv422p10le", "format=yuv420p10le"),
+                     ("yuv422p", "format=yuv420p"),
+                     ("yuv444p", "format=yuv420p"),
+                     ("yuv444p10le", "format=yuv420p10le"),
+                     ("yuvj422p", "format=yuv420p"),
+                     ("yuv420p", null),
+                     ("yuv420p10le", null),
+                     ("nv12", null),
+                     ("p010le", null),
+                     ("p012le", "format=yuv420p10le"),
+                     (string.Empty, null),
+                 })
+        {
+            var filter = EncoderCatalog.BuildYuv420ConversionFilter(
+                av1Nvenc,
+                new MediaStreamInfo { PixelFormat = source },
+                string.Empty);
+
+            if (filter != expected)
+            {
+                yuv420Case.Failures.Add(
+                    $"源 {source} 的转换判定不符：得到 {filter ?? "null"}，应为 {expected ?? "null"}");
+            }
+        }
+
+        // 用户手填了像素格式时以用户为准，不叠加自动转换
+        var userOverride = EncoderCatalog.BuildYuv420ConversionFilter(
+            av1Nvenc,
+            new MediaStreamInfo { PixelFormat = "yuv422p10le" },
+            "yuv420p");
+        if (userOverride is not null)
+        {
+            yuv420Case.Failures.Add("用户已指定像素格式时不应再插自动转换");
+        }
+
+        // 不需要 4:2:0 的编码器永远不插
+        var otherEncoder = EncoderCatalog.BuildYuv420ConversionFilter(
+            EncoderCatalog.Get("hevc_nvenc"),
+            new MediaStreamInfo { PixelFormat = "yuv422p10le" },
+            string.Empty);
+        if (otherEncoder is not null)
+        {
+            yuv420Case.Failures.Add("hevc_nvenc 能吃 4:2:2，不应插转换");
+        }
+
+        yuv420Case.Details.Add("判定覆盖 4:2:0（含 nv12/p010）、4:2:2、4:4:4 与位深 8/10/12/16");
+
+        yuv420Case.Passed = yuv420Case.Failures.Count == 0;
+        results.Add(yuv420Case);
 
         return results;
     }
@@ -1220,6 +1336,50 @@ public static class SelfTest
                     DurationSeconds = 5,
                     ExpectAudio = true,
                     ContainerExtension = "mp4",
+                });
+        }
+
+        // ── av1_nvenc 的 4:2:0 输入约束（实测 4:2:2 / 4:4:4 源直接编码失败）──
+        if (context.Capabilities.IsEncoderAvailable("av1_nvenc"))
+        {
+            var yuv422Info = MediaProbe.ProbeAsync(context.Paths.Ffprobe, context.Yuv422Path)
+                .GetAwaiter().GetResult();
+            if (yuv422Info is not null)
+            {
+                var yuv422Params = new TranscodeParams { EncoderId = "av1_nvenc" };
+                yuv422Params.InitializeTracksFrom(yuv422Info, resetExisting: true);
+                foreach (var track in yuv422Params.AudioTracks)
+                {
+                    // PCM 音轨在 mp4 里可直通（实测），顺便锁住它不再被强行重编码
+                    track.Action = AudioActionKind.Copy;
+                }
+
+                cases.Add((
+                    "AV1 硬编 · 4:2:2 10bit 源（自动转 4:2:0，PCM 音轨直通）",
+                    context.Yuv422Path,
+                    yuv422Params,
+                    new Expectation
+                    {
+                        CodecName = "av1",
+                        PixelFormat = "yuv420p10le",
+                        Width = 320,
+                        Height = 180,
+                        ExpectAudio = true,
+                        ExpectAudioCodec = "pcm_s16le",
+                        ContainerExtension = "mp4",
+                        RequireArguments = ["format=yuv420p10le"],
+                    }));
+            }
+
+            // 反向：4:2:0 源不该被插任何格式转换
+            Add(
+                "AV1 硬编 · 4:2:0 源（不做多余的格式转换）",
+                Base(p => p.EncoderId = "av1_nvenc"),
+                new Expectation
+                {
+                    CodecName = "av1",
+                    ContainerExtension = "mp4",
+                    ForbidArguments = ["format=yuv420"],
                 });
         }
 

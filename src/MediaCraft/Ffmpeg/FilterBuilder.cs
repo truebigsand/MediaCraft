@@ -93,6 +93,11 @@ public static class FilterBuilder
         var hasSoftwareFilter = false;
         var isGpuOnly = true;
 
+        // av1_nvenc 只接受 4:2:0 输入，非 4:2:0 源要在链尾转一次。
+        // 走滤镜而不是 -pix_fmt 输出选项，是为了让 HasSoftwareFilter 生效，
+        // 从而自动关掉 -hwaccel_output_format 的显存帧路径（显存帧做不了软件格式转换）。
+        var pixelFormatFilter = EncoderCatalog.BuildYuv420ConversionFilter(encoder, info.VideoStream, parameters.PixelFormat);
+
         // ── 缩放 ──
         var scaleFilter = BuildScaleFilter(info, parameters, out var scaleNote);
         if (scaleNote is not null)
@@ -105,7 +110,8 @@ public static class FilterBuilder
         {
             useGpuScale = effectiveAccel == HwAccelKind.Cuda
                           && encoder.Family == EncoderFamily.Nvenc
-                          && subtitlePath is null;
+                          && subtitlePath is null
+                          && pixelFormatFilter is null;
 
             if (useGpuScale)
             {
@@ -133,6 +139,14 @@ public static class FilterBuilder
             isGpuOnly = false;
         }
 
+        // ── 像素格式（链尾，与 ffmpeg 的 -pix_fmt 输出选项语义一致）──
+        if (pixelFormatFilter is not null)
+        {
+            result.Add(pixelFormatFilter);
+            hasSoftwareFilter = true;
+            isGpuOnly = false;
+        }
+
         var chain = new FilterChainResult
         {
             Filter = result.Count == 0 ? null : string.Join(",", result),
@@ -148,6 +162,12 @@ public static class FilterBuilder
         if (useGpuScale)
         {
             chain.Notes.Add("缩放走 scale_cuda（全程在显存内完成）");
+        }
+
+        if (pixelFormatFilter is not null)
+        {
+            chain.Notes.Add(
+                $"{encoder.DisplayName} 需要 4:2:0 输入，源是 {info.VideoStream?.PixelFormat}，已插入格式转换（{pixelFormatFilter.Replace("format=", string.Empty, StringComparison.Ordinal)}）");
         }
 
         return chain;

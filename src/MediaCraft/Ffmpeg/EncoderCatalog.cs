@@ -66,6 +66,16 @@ public sealed class EncoderDefinition
     public string[] TwoPassArguments { get; init; } = [];
 
     /// <summary>
+    /// 该编码器是否只接受 4:2:0 输入（4:2:2 / 4:4:4 源必须先转成 4:2:0）。
+    ///
+    /// 实测：av1_nvenc 直接编码 10bit 4:2:2 或 8bit 4:4:4 源会失败
+    ///（不带硬解时报 No capable devices found；带 -hwaccel cuda 时报
+    /// Provided device doesn't support required NVENC features），加 -pix_fmt yuv420p 后正常；
+    /// 10bit 4:2:0 源不需要转换。其余编码器（hevc/h264 nvenc、qsv 系列、软编）实测都能直接处理 4:2:2。
+    /// </summary>
+    public bool NeedsYuv420Input { get; init; }
+
+    /// <summary>
     /// 该多遍机制是否只在目标码率模式下有效。
     /// 实测：ffmpeg 的两遍在质量优先模式下第二遍会直接失败；qsv 的 -extbrc 在 ICQ 模式下产出字节完全相同（无效果）。
     /// nvenc 的 -multipass 两种模式都有实测差别，故为 false。
@@ -166,12 +176,13 @@ public sealed class AudioCodecDefinition
     /// <summary>下拉框的可访问名称。</summary>
     public override string ToString() => DisplayName;
 
-    /// <summary>PCM 的位深；非 PCM 返回 0。</summary>
+    /// <summary>PCM 的位深；非 PCM 返回 0。浮点格式按其容器位宽算（f32=32、f64=64）。</summary>
     public static int PcmBitDepth(string codecId) => codecId switch
     {
-        "pcm_s16le" => 16,
-        "pcm_s24le" => 24,
-        "pcm_s32le" => 32,
+        "pcm_s16le" or "pcm_s16be" => 16,
+        "pcm_s24le" or "pcm_s24be" => 24,
+        "pcm_s32le" or "pcm_s32be" or "pcm_f32le" or "pcm_f32be" => 32,
+        "pcm_f64le" or "pcm_f64be" => 64,
         _ => 0,
     };
 }
@@ -226,6 +237,7 @@ public static class EncoderCatalog
             Codec = "av1", Family = EncoderFamily.Nvenc, PreferredAccel = HwAccelKind.Cuda,
             TwoPassKind = TwoPassKind.EncoderInternal,
             TwoPassArguments = ["-multipass", "2"],
+            NeedsYuv420Input = true,
             TwoPassRequiresBitrate = false,
             QualityParam = "-cq", QualityLabel = "CQ", QualityMax = 51,
             Presets = NvencPresets, DefaultPreset = "p5", Tunes = NvencTunes,
@@ -338,6 +350,7 @@ public static class EncoderCatalog
             [
                 "aac", "opus", "mp3", "ac3", "flac", "vorbis", "alac",
                 "pcm_s16le", "pcm_s24le", "pcm_s32le",
+                "pcm_s16be", "pcm_s24be", "pcm_f32le", "pcm_f64le",
             ],
             // 实测：MP4/MOV 只认 mov_text（srt/ass/webvtt 都会 "not supported"）
             SubtitleCodecs = ["mov_text"],
@@ -350,6 +363,7 @@ public static class EncoderCatalog
             [
                 "aac", "opus", "mp3", "ac3", "flac", "vorbis", "alac",
                 "pcm_s16le", "pcm_s24le", "pcm_s32le",
+                "pcm_s16be", "pcm_s24be", "pcm_f32le", "pcm_f64le",
             ],
             // 实测：matroska 不支持 mov_text，所以这里没有它；copy 表示原样内封（PGS 等图形字幕也能装）
             SubtitleCodecs = ["subrip", "ass", "webvtt", "copy"],
@@ -362,7 +376,8 @@ public static class EncoderCatalog
             // 实测：libopus 与 flac 装不进 mov；PCM 可以
             AudioCodecs =
             [
-                "aac", "mp3", "ac3", "vorbis", "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+                "aac", "mp3", "ac3", "vorbis", "alac",
+                "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_s16be", "pcm_s24be", "pcm_f32le", "pcm_f64le",
             ],
             SubtitleCodecs = ["mov_text"],
         },
@@ -405,7 +420,10 @@ public static class EncoderCatalog
             MaxAudioStreams = 1,
             AudioCodecs =
             [
-                "aac", "mp3", "ac3", "flac", "vorbis", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+                "aac", "mp3", "ac3", "flac", "vorbis",
+                // WAVE 规范只收小端：pcm_s16be / pcm_s24be 会被 muxer 拒绝
+                //（Codec pcm_s16be not supported in WAVE format），浮点小端则可以
+                "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_f64le",
             ],
         },
     ];
@@ -431,6 +449,10 @@ public static class EncoderCatalog
         new AudioCodecDefinition { Id = "pcm_s16le", DisplayName = "PCM 16bit（无损未压缩）", IsLossless = true },
         new AudioCodecDefinition { Id = "pcm_s24le", DisplayName = "PCM 24bit（无损未压缩）", IsLossless = true },
         new AudioCodecDefinition { Id = "pcm_s32le", DisplayName = "PCM 32bit（无损未压缩）", IsLossless = true },
+        new AudioCodecDefinition { Id = "pcm_s16be", DisplayName = "PCM 16bit 大端（无损未压缩）", IsLossless = true },
+        new AudioCodecDefinition { Id = "pcm_s24be", DisplayName = "PCM 24bit 大端（无损未压缩）", IsLossless = true },
+        new AudioCodecDefinition { Id = "pcm_f32le", DisplayName = "PCM 32bit 浮点（无损未压缩）", IsLossless = true },
+        new AudioCodecDefinition { Id = "pcm_f64le", DisplayName = "PCM 64bit 浮点（无损未压缩）", IsLossless = true },
     ];
 
     /// <summary>
@@ -664,6 +686,80 @@ public static class EncoderCatalog
             pixelFormat.Contains("16", StringComparison.Ordinal);
 
         return !isHighBitDepth || encoder.SupportsTenBit;
+    }
+
+    /// <summary>色度采样是否为 4:2:0（格式名含 420，或硬件侧的 4:2:0 格式）。</summary>
+    public static bool IsYuv420(string pixelFormat)
+    {
+        var format = pixelFormat.Trim().ToLowerInvariant();
+        if (format.Length == 0)
+        {
+            return false;
+        }
+
+        return format.Contains("420", StringComparison.Ordinal)
+               || format is "nv12" or "nv21" or "p010le" or "p010be";
+    }
+
+    /// <summary>从像素格式名读位深：无位深后缀按 8bit，p10/p010 → 10，p12/p012 → 12，p16/p016 → 16。</summary>
+    public static int PixelFormatBitDepth(string pixelFormat)
+    {
+        var format = pixelFormat.Trim().ToLowerInvariant();
+        if (format.EndsWith("p16le", StringComparison.Ordinal) || format.EndsWith("p016le", StringComparison.Ordinal))
+        {
+            return 16;
+        }
+
+        if (format.EndsWith("p12le", StringComparison.Ordinal) || format.EndsWith("p012le", StringComparison.Ordinal))
+        {
+            return 12;
+        }
+
+        if (format.EndsWith("p10le", StringComparison.Ordinal) || format.EndsWith("p010le", StringComparison.Ordinal))
+        {
+            return 10;
+        }
+
+        return 8;
+    }
+
+    /// <summary>
+    /// 编码器要求 4:2:0 输入（<see cref="EncoderDefinition.NeedsYuv420Input"/>）而源不满足时，
+    /// 返回需要插入滤镜链的格式转换；源本身就是可接受的 4:2:0 时返回 null。
+    ///
+    /// 目标格式跟着源位深走：8bit 源 → yuv420p，10bit 及以上 → yuv420p10le
+    ///（NVENC 的 AV1 输出只到 10bit，更高位深降到 10bit）。
+    /// 用户在高级参数里手填了像素格式时不插手：以用户指定的为准。
+    /// </summary>
+    public static string? BuildYuv420ConversionFilter(
+        EncoderDefinition encoder,
+        MediaStreamInfo? videoStream,
+        string userPixelFormat)
+    {
+        if (!encoder.NeedsYuv420Input || videoStream is null)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(userPixelFormat))
+        {
+            return null;
+        }
+
+        var source = videoStream.PixelFormat;
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            // 探测不到像素格式：不擅自插转换，交给 ffmpeg 自己判断
+            return null;
+        }
+
+        var bitDepth = PixelFormatBitDepth(source);
+        if (IsYuv420(source) && bitDepth <= 10)
+        {
+            return null;
+        }
+
+        return bitDepth > 8 ? "format=yuv420p10le" : "format=yuv420p";
     }
 
     private static double InterpolateFraction(int slider)
