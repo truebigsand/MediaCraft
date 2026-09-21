@@ -119,7 +119,7 @@
                 <TextBlock Text="{Binding QueueStatus}" Style="{StaticResource HintText}" />
             </StatusBarItem>
             <StatusBarItem>
-                <TextBlock x:Name="StatusVersion" Text="v0.1.0" Style="{StaticResource HintText}" />
+                <TextBlock x:Name="StatusVersion" Text="v0.2.0" Style="{StaticResource HintText}" />
             </StatusBarItem>
         </StatusBar>
     </Grid>
