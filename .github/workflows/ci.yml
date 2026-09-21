@@ -9,6 +9,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -19,18 +20,37 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # 完整自检要真跑转码，先装 ffmpeg（choco 的包是 gyan.dev full build）
+      - name: Install ffmpeg
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          "$env:ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          & "$env:ProgramData\chocolatey\bin\ffmpeg.exe" -version | Select-Object -First 1
+
       - name: Restore
         run: dotnet restore MediaCraft.slnx
 
       - name: Build (Release)
         run: dotnet build MediaCraft.slnx -c Release --no-restore
 
-      # logic 模式只跑预设/参数纯逻辑，不依赖 ffmpeg（干净 runner 上也能过）
-      - name: Self test (pure logic, no ffmpeg required)
+      # 完整自检：真跑 ffmpeg。runner 上没有 NVIDIA / Intel 硬件，
+      # 自检会自动跳过依赖硬件的用例（硬解、NVENC、QSV），只跑软件编码器与纯逻辑部分。
+      - name: Self test (full, requires ffmpeg)
         shell: pwsh
         run: |
-          dotnet run --project src/MediaCraft/MediaCraft.csproj -c Release --no-build -- --selftest logic "$env:RUNNER_TEMP\selftest.txt"
-          Get-Content "$env:RUNNER_TEMP\selftest.txt"
+          dotnet run --project src/MediaCraft/MediaCraft.csproj -c Release --no-build -- --selftest all "$env:RUNNER_TEMP\selftest.txt"
+
+      - name: Show self-test report
+        if: always()
+        shell: pwsh
+        run: |
+          $report = "$env:RUNNER_TEMP\selftest.txt"
+          if (Test-Path $report) {
+            Get-Content $report -Encoding UTF8 | Select-Object -Last 120
+          } else {
+            Write-Output "（没有生成报告：自检可能在早期就失败了）"
+          }
 
       - name: Publish framework-dependent
         run: dotnet publish src/MediaCraft/MediaCraft.csproj -c Release -r win-x64 --self-contained false -o dist/framework-dependent

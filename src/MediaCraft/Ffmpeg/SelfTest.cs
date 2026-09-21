@@ -119,6 +119,26 @@ public static class SelfTest
         public required FfmpegPaths Paths { get; init; }
 
         public required FfmpegCapabilities Capabilities { get; init; }
+
+        /// <summary>
+        /// 本机是否有可用的硬件视频编码器。CI runner 上为 false，
+        /// 用环境变量 MEDIACRAFT_SELFTEST_NO_HARDWARE=1 可以在本地预演该环境。
+        /// </summary>
+        public required bool HasHardwareEncoders { get; init; }
+
+        /// <summary>
+        /// 不需要硬件特性的用例统一用它选编码器：硬件优先、软件兜底。
+        /// 期望的产出编码都是 h264，换编码器不影响断言。
+        /// </summary>
+        public required string PickVideoEncoder { get; init; }
+
+        /// <summary>某个视频编码器在当前自检环境里是否可用（硬件被模拟屏蔽时视为不可用）。</summary>
+        public bool EncoderAvailable(string encoderId) =>
+            Capabilities.IsEncoderAvailable(encoderId)
+            && (!SoftwareOnly || !EncoderCatalog.Get(encoderId).IsHardware);
+
+        /// <summary>环境变量要求把硬件编码器当作不可用（预演 CI）。</summary>
+        public required bool SoftwareOnly { get; init; }
     }
 
     public static async Task<int> RunAsync(string[] args)
@@ -359,6 +379,20 @@ public static class SelfTest
                 Passed = true,
             }.WithDetail("1280x720 30fps 5s + AAC 测试片与内封字幕 MKV 生成成功"));
 
+            // 环境变量：把硬件编码器当作不可用。CI runner 上没有 NVIDIA / Intel 硬件，
+            // 用它可以在本地预演出 CI 环境下的自检结果。
+            var softwareOnly = string.Equals(
+                Environment.GetEnvironmentVariable("MEDIACRAFT_SELFTEST_NO_HARDWARE"),
+                "1",
+                StringComparison.Ordinal);
+
+            bool Available(string encoderId) =>
+                capabilities.IsEncoderAvailable(encoderId)
+                && (!softwareOnly || !EncoderCatalog.Get(encoderId).IsHardware);
+
+            // 功能类用例统一用它选编码器：硬件优先、软件兜底（期望产出都是 h264，断言不受影响）
+            var pickVideoEncoder = new[] { "h264_nvenc", "h264_qsv", "libx264" }.First(Available);
+
             var context = new Context
             {
                 WorkDirectory = workDirectory,
@@ -374,6 +408,9 @@ public static class SelfTest
                 Yuv422Path = yuv422Path,
                 Paths = paths,
                 Capabilities = capabilities,
+                SoftwareOnly = softwareOnly,
+                HasHardwareEncoders = EncoderCatalog.All.Any(e => e.IsHardware && Available(e.Id)),
+                PickVideoEncoder = pickVideoEncoder,
             };
 
             // ── 5. 用例矩阵（快速模式跳过）──
@@ -402,7 +439,7 @@ public static class SelfTest
 
                 Write(string.Empty);
                 Write("[4c] 多遍编码支持情况校验（统计文件 / 参数是否被使用）");
-                var twoPassCase = await VerifyTwoPassSupportAsync(paths, workDirectory).ConfigureAwait(false);
+                var twoPassCase = await VerifyTwoPassSupportAsync(paths, workDirectory, context).ConfigureAwait(false);
                 results.Add(twoPassCase);
                 Write($"  {(twoPassCase.Passed ? "✓ PASS" : "✗ FAIL")}  {twoPassCase.Name}");
                 foreach (var detail in twoPassCase.Details)
@@ -1208,7 +1245,10 @@ public static class SelfTest
     /// - 编码器内部多遍：ffmpeg 是否把这些参数标记为「未被任何流使用」
     /// - 无：把两族的代表参数（-multipass / -extbrc）都试一遍，必须都被标记为未使用
     /// </summary>
-    private static async Task<CaseResult> VerifyTwoPassSupportAsync(FfmpegPaths paths, string workDirectory)
+    private static async Task<CaseResult> VerifyTwoPassSupportAsync(
+        FfmpegPaths paths,
+        string workDirectory,
+        Context context)
     {
         var result = new CaseResult { Name = "多遍编码支持情况与实测一致" };
         var probeDirectory = Path.Combine(workDirectory, "twopass");
@@ -1237,9 +1277,18 @@ public static class SelfTest
 
         var mismatches = new List<string>();
         var agreements = 0;
+        var skipped = new List<string>();
 
         foreach (var encoder in EncoderCatalog.All)
         {
+            // 本机没有的编码器直接跳过：CI runner 上没有 NVENC / QSV，
+            // 硬跑会失败并被判成「与表不一致」，但那只是环境差异而不是回归。
+            if (!context.EncoderAvailable(encoder.Id))
+            {
+                skipped.Add(encoder.Id);
+                continue;
+            }
+
             var prefix = Path.Combine(probeDirectory, "tp-" + encoder.Id);
             TryDelete(prefix + "-0.log");
 
@@ -1321,7 +1370,11 @@ public static class SelfTest
             }
         }
 
-        result.Details.Add($"探测 {EncoderCatalog.All.Count} 个编码器，与表一致 {agreements} 个");
+        result.Details.Add($"探测 {EncoderCatalog.All.Count - skipped.Count} 个编码器，与表一致 {agreements} 个");
+        if (skipped.Count > 0)
+        {
+            result.Details.Add("本机不可用、已跳过：" + string.Join("、", skipped));
+        }
         foreach (var kind in new[] { TwoPassKind.ExternalPass, TwoPassKind.EncoderInternal, TwoPassKind.None })
         {
             result.Details.Add(
@@ -1365,7 +1418,7 @@ public static class SelfTest
         // ── 简单模式：每个编码器一个用例 ──
         foreach (var encoder in EncoderCatalog.All)
         {
-            if (!context.Capabilities.IsEncoderAvailable(encoder.Id))
+            if (!context.EncoderAvailable(encoder.Id))
             {
                 continue;
             }
@@ -1406,7 +1459,7 @@ public static class SelfTest
             return parameters;
         }
 
-        if (yuv422Info is not null && context.Capabilities.IsEncoderAvailable("av1_nvenc"))
+        if (yuv422Info is not null && context.EncoderAvailable("av1_nvenc"))
         {
             cases.Add((
                 "AV1 硬编 · 4:2:2 10bit 源（自动转 4:2:0，PCM 音轨直通）",
@@ -1447,7 +1500,7 @@ public static class SelfTest
                      ("vp9_qsv", "vp9", "yuv420p", "vpp_qsv=format=nv12"),
                  })
         {
-            if (yuv422Info is null || !context.Capabilities.IsEncoderAvailable(encoderId))
+            if (yuv422Info is null || !context.EncoderAvailable(encoderId))
             {
                 continue;
             }
@@ -1470,7 +1523,7 @@ public static class SelfTest
         }
 
         // 软解路径：同样的源走软件 format 转换，不该出现 vpp_qsv
-        if (yuv422Info is not null && context.Capabilities.IsEncoderAvailable("h264_qsv"))
+        if (yuv422Info is not null && context.EncoderAvailable("h264_qsv"))
         {
             cases.Add((
                 "QSV · h264_qsv 软解路径（format 转换，不用 vpp_qsv）",
@@ -1488,7 +1541,7 @@ public static class SelfTest
 
         // QSV 硬解不能与软件滤镜共存（实测滤镜图协商时直接失败，cuda / d3d11va / dxva2 都能自动回读）
         // 预检应把硬解降级为 CPU 解码，命令里不该再出现 -hwaccel qsv
-        if (context.Capabilities.IsEncoderAvailable("h264_qsv"))
+        if (context.EncoderAvailable("h264_qsv"))
         {
             Add(
                 "QSV · 硬解 + 软件缩放（应降级为 CPU 解码）",
@@ -1509,25 +1562,29 @@ public static class SelfTest
         }
 
         // ── 硬解路径：NVENC + cuda（帧留在显存）──
-        Add(
-            "硬解 · NVENC + cuda 显存内转码",
-            Base(p =>
-            {
-                p.EncoderId = "h264_nvenc";
-                p.HwAccel = HwAccelKind.Cuda;
-            }),
-            new Expectation { CodecName = "h264", Width = 1280, Height = 720, ContainerExtension = "mp4" });
+        // 需要真实 NVIDIA 硬件，CI runner 上没有，跳过
+        if (context.EncoderAvailable("h264_nvenc"))
+        {
+            Add(
+                "硬解 · NVENC + cuda 显存内转码",
+                Base(p =>
+                {
+                    p.EncoderId = context.PickVideoEncoder;
+                    p.HwAccel = HwAccelKind.Cuda;
+                }),
+                new Expectation { CodecName = "h264", Width = 1280, Height = 720, ContainerExtension = "mp4" });
 
-        // ── GPU 缩放路径（scale_cuda）──
-        Add(
-            "缩放 · 854x480 + NVENC（scale_cuda 路径）",
-            Base(p =>
-            {
-                p.EncoderId = "h264_nvenc";
-                p.ScaleMode = ScaleMode.Width;
-                p.ScaleWidth = 854;
-            }),
-            new Expectation { CodecName = "h264", Width = 854, Height = 480, ContainerExtension = "mp4" });
+            // ── GPU 缩放路径（scale_cuda）──
+            Add(
+                "缩放 · 854x480 + NVENC（scale_cuda 路径）",
+                Base(p =>
+                {
+                    p.EncoderId = context.PickVideoEncoder;
+                    p.ScaleMode = ScaleMode.Width;
+                    p.ScaleWidth = 854;
+                }),
+                new Expectation { CodecName = "h264", Width = 854, Height = 480, ContainerExtension = "mp4" });
+        }
 
         // ── 缩放 · 软件路径 ──
         Add(
@@ -1545,19 +1602,19 @@ public static class SelfTest
             "缩放 · Fit 到 1920x1080 框（源更小，应保持原样）",
             Base(p =>
             {
-                p.EncoderId = "h264_nvenc";
+                p.EncoderId = context.PickVideoEncoder;
                 p.ScaleMode = ScaleMode.Fit;
                 p.ScaleWidth = 1920;
                 p.ScaleHeight = 1080;
             }),
             new Expectation { CodecName = "h264", Width = 1280, Height = 720, ContainerExtension = "mp4" });
 
-        // ── 烧字幕 · 内封轨（中文+空格目录，硬解+软件滤镜桥接）──
+        // ── 烧字幕 · 内封轨（中文+空格目录）──
         var embeddedInfo = MediaProbe.ProbeAsync(context.Paths.Ffprobe, context.SampleWithSubtitlePath)
             .GetAwaiter().GetResult();
         if (embeddedInfo is not null && embeddedInfo.HasSubtitle)
         {
-            var burnParameters = new TranscodeParams { EncoderId = "h264_nvenc" };
+            var burnParameters = new TranscodeParams { EncoderId = context.PickVideoEncoder };
             burnParameters.InitializeTracksFrom(embeddedInfo, resetExisting: true);
             foreach (var track in burnParameters.SubtitleTracks)
             {
@@ -1565,13 +1622,13 @@ public static class SelfTest
             }
 
             cases.Add((
-                "烧字幕 · 内封轨（中文+空格目录，硬解桥接）",
+                "烧字幕 · 内封轨（中文+空格目录）",
                 context.SampleWithSubtitlePath,
                 burnParameters,
                 new Expectation { CodecName = "h264", Width = 1280, Height = 720, ContainerExtension = "mp4" }));
 
             // ── 字幕提取（附带产出 .srt）──
-            var extractParameters = new TranscodeParams { EncoderId = "h264_nvenc" };
+            var extractParameters = new TranscodeParams { EncoderId = context.PickVideoEncoder };
             extractParameters.InitializeTracksFrom(embeddedInfo, resetExisting: true);
             foreach (var track in extractParameters.SubtitleTracks)
             {
@@ -1611,7 +1668,7 @@ public static class SelfTest
             "音频 · 重编码 AAC 128k 立体声",
             Base(p =>
             {
-                p.EncoderId = "h264_nvenc";
+                p.EncoderId = context.PickVideoEncoder;
                 foreach (var track in p.AudioTracks)
                 {
                     track.Action = AudioActionKind.Encode;
@@ -1636,7 +1693,7 @@ public static class SelfTest
             "音频 · PCM 24bit（不传码率，采样率 48k、声道立体声）",
             Base(p =>
             {
-                p.EncoderId = "h264_nvenc";
+                p.EncoderId = context.PickVideoEncoder;
                 foreach (var track in p.AudioTracks)
                 {
                     track.Action = AudioActionKind.Encode;
@@ -1663,7 +1720,7 @@ public static class SelfTest
             "音频 · AC3 非法码率（预检应取整到 192k）",
             Base(p =>
             {
-                p.EncoderId = "h264_nvenc";
+                p.EncoderId = context.PickVideoEncoder;
                 p.Container = "mkv";
                 foreach (var track in p.AudioTracks)
                 {
@@ -1702,24 +1759,28 @@ public static class SelfTest
             });
 
         // ── 编码器内部多遍：nvenc 用 -multipass，单次调用（应为 1 步）──
-        Add(
-            "多遍编码 · NVENC 内部多遍（单步 + -multipass 2）",
-            Base(p =>
-            {
-                p.EncoderId = "h264_nvenc";
-                p.QualityMode = QualityMode.Advanced;
-                p.RateControl = RateControlKind.Bitrate;
-                p.BitrateKbps = 800;
-                p.TwoPass = true;
-            }),
-            new Expectation
-            {
-                CodecName = "h264",
-                ContainerExtension = "mp4",
-                ExpectStepCount = 1,
-                RequireArguments = ["-multipass", "2"],
-                ForbidArguments = ["-pass"],
-            });
+        // 需要真实 NVENC 硬件，CI runner 上没有，跳过
+        if (context.EncoderAvailable("h264_nvenc"))
+        {
+            Add(
+                "多遍编码 · NVENC 内部多遍（单步 + -multipass 2）",
+                Base(p =>
+                {
+                    p.EncoderId = "h264_nvenc";
+                    p.QualityMode = QualityMode.Advanced;
+                    p.RateControl = RateControlKind.Bitrate;
+                    p.BitrateKbps = 800;
+                    p.TwoPass = true;
+                }),
+                new Expectation
+                {
+                    CodecName = "h264",
+                    ContainerExtension = "mp4",
+                    ExpectStepCount = 1,
+                    RequireArguments = ["-multipass", "2"],
+                    ForbidArguments = ["-pass"],
+                });
+        }
 
         // ── opus 直通：若编码名归一化出错，预检会强行重编码，输出音轨会变成 aac ──
         Add(
@@ -1740,7 +1801,7 @@ public static class SelfTest
         {
             TranscodeParams ThreeAudio(string container) => new TranscodeParams
             {
-                EncoderId = "h264_nvenc",
+                EncoderId = context.PickVideoEncoder,
                 Container = container,
             };
 
@@ -1761,7 +1822,7 @@ public static class SelfTest
             cases.Add((
                 "多音轨 · 丢弃视频 + FLAC 容器 + 3 条音轨（单音轨容器，预检必须拦下）",
                 context.ThreeAudioPath,
-                new TranscodeParams { EncoderId = "h264_nvenc", Container = "flac", VideoMode = VideoMode.Drop },
+                new TranscodeParams { EncoderId = context.PickVideoEncoder, Container = "flac", VideoMode = VideoMode.Drop },
                 new Expectation { ExpectPreflightBlocked = true }));
         }
 
@@ -1795,7 +1856,7 @@ public static class SelfTest
             "高级模式 · 目标码率 1200k + maxrate/bufsize",
             Base(p =>
             {
-                p.EncoderId = "h264_nvenc";
+                p.EncoderId = context.PickVideoEncoder;
                 p.QualityMode = QualityMode.Advanced;
                 p.RateControl = RateControlKind.Bitrate;
                 p.BitrateKbps = 1200;
@@ -1809,7 +1870,7 @@ public static class SelfTest
             "帧率 · 30 → 15 fps",
             Base(p =>
             {
-                p.EncoderId = "h264_nvenc";
+                p.EncoderId = context.PickVideoEncoder;
                 p.FrameRate = "15";
             }),
             new Expectation { CodecName = "h264", ContainerExtension = "mp4" });
@@ -1826,7 +1887,7 @@ public static class SelfTest
             "预检拦截 · 输出路径等于源文件（必须报错）",
             Base(p =>
             {
-                p.EncoderId = "h264_nvenc";
+                p.EncoderId = context.PickVideoEncoder;
                 p.AllowOverwrite = true;
                 p.NamingTemplate = "{name}";
                 // 输出到源目录 + 只留原名 = 与源文件同名，预检必须拦下

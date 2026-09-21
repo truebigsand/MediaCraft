@@ -115,18 +115,25 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-fd.ps1
 ## 自检
 
 ```powershell
-# 完整自检：真跑 56 项，含 171 个容器×编码组合的兼容性矩阵
-.\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest all "$env:TEMP\report.txt"
+# 纯逻辑自检：预设、参数与命名规则、格式换算，不需要 ffmpeg（约 2 秒，本地改代码后先跑这个）
+.\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest logic "$env:TEMP\report.txt"
 
-# 快速自检：定位、能力探测、编码器功能探测、生成测试素材（约 15 秒）
+# 快速自检：再加定位、能力探测、编码器功能探测、生成测试素材（约 15 秒）
 .\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest quick "$env:TEMP\report.txt"
 
-# 纯逻辑自检：只跑预设、参数与命名规则，不需要 ffmpeg（CI 用这个）
-.\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest logic "$env:TEMP\report.txt"
+# 完整自检：真跑 56 项，含 171 个容器×编码组合的兼容性矩阵（本机约 4 分钟）
+.\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest all "$env:TEMP\report.txt"
 ```
+
+日常改动的节奏是：本地跑 `logic`（秒级）与 `quick`，把 `all` 交给 CI —— 推送到 GitHub 后
+Actions 会装好 ffmpeg 并跑完整自检（runner 上没有 NVIDIA / Intel 硬件，依赖硬件的用例会自动跳过），
+失败时会打印报告末尾部分。发版前如果需要本地产物级验证，再用发布出来的 exe 跑一次 `all`。
 
 退出码 0 表示全部通过。图形界面里也有「设置 → 运行快速自检」，跑完自动打开报告。
 换一台机器时，跑一次快速自检即可知道本机哪些编码器可用、容器支持什么。
+
+想在本地预演 CI 那台没有硬件的机器，设 `MEDIACRAFT_SELFTEST_NO_HARDWARE=1` 再跑，
+自检会把硬件编码器当作不可用。
 
 ## 架构
 
