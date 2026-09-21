@@ -26,6 +26,12 @@ public sealed partial class MediaFileViewModel : ObservableObject
 
     public string FileName => System.IO.Path.GetFileName(Path);
 
+    /// <summary>
+    /// 列表行的可访问名称。不重写的话屏幕阅读器（以及 UI 自动化）读到的会是
+    /// `MediaCraft.ViewModels.MediaFileViewModel` 这种类名。
+    /// </summary>
+    public override string ToString() => FileName;
+
     public string DirectoryName => System.IO.Path.GetDirectoryName(Path) ?? string.Empty;
 
     [ObservableProperty]

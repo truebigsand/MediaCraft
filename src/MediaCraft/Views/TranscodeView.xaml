@@ -59,8 +59,8 @@
                         -->
                         <ListView.ContextMenu>
                             <ContextMenu>
-                                <MenuItem Header="加入队列（选中项）" Click="OnEnqueueSelectedClick" />
-                                <MenuItem Header="只加入队列（右键这一个）" Click="OnEnqueueContextFileClick" />
+                                <!-- 只保留一个「加入队列」：作用于右键点的这一项（工具栏按钮才是批量入口） -->
+                                <MenuItem Header="加入队列" Click="OnEnqueueContextFileClick" />
                                 <Separator />
                                 <MenuItem Header="复制文件路径" Click="OnCopyFilePathClick" />
                                 <MenuItem Header="在资源管理器中显示" Click="OnRevealFileClick" />

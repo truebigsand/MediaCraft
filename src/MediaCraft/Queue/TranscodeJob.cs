@@ -43,6 +43,9 @@ public sealed partial class TranscodeJob : ObservableObject
     [JsonIgnore]
     public string SourceName => Path.GetFileName(SourcePath);
 
+    /// <summary>队列行的可访问名称（理由同 MediaFileViewModel）。</summary>
+    public override string ToString() => SourceName;
+
     /// <summary>该任务自己的参数（每文件独立）。</summary>
     public TranscodeParams Parameters { get; init; }
 
