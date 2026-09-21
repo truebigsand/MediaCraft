@@ -116,6 +116,16 @@ public sealed partial class TranscodeViewModel : ObservableObject
     [ObservableProperty]
     private string _encoderHint = string.Empty;
 
+    /// <summary>当前编码器是否支持两遍编码（界面据此决定选项是否可勾选）。</summary>
+    public bool CanUseTwoPass => Params.Encoder.SupportsTwoPass;
+
+    /// <summary>
+    /// 两遍编码的说明文字：按当前编码器推导，而不是只在「预检修正」那一刻写一次
+    ///（那样修正完的第二轮预检会把提示清掉，用户只看到选项被关掉却不知原因）。
+    /// </summary>
+    [ObservableProperty]
+    private string _twoPassHint = string.Empty;
+
     /// <summary>
     /// 改参数时是否同步到列表里所有文件。
     /// 默认开启：批量转码的常态是「一批素材统一规格」；关掉后才做纯粹的逐文件精调。
@@ -608,6 +618,12 @@ public sealed partial class TranscodeViewModel : ObservableObject
     {
         var encoder = Params.Encoder;
         EncoderHint = Options.EncoderHint(encoder);
+        OnPropertyChanged(nameof(CanUseTwoPass));
+
+        TwoPassHint = encoder.SupportsTwoPass
+            ? "第一遍只做分析并写统计文件，第二遍按统计结果编码；需要配合目标码率使用。"
+            : $"当前编码器（{encoder.Id}）不支持两遍编码：ffmpeg 会忽略 -pass，既不报错也不写统计文件。" +
+              "软件编码器 x264 / x265 / SVT-AV1 / AOM 支持。";
         QualityLabelText = $"{encoder.QualityLabel}（范围 {encoder.QualityMin}-{encoder.QualityMax}，越小越清晰）";
 
         if (Params.VideoMode != VideoMode.Encode)

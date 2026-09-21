@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text;
 using MediaCraft.Media;
 
@@ -116,13 +117,14 @@ public static class TranscodeCommandBuilder
         var burnSource = ResolveBurnSubtitle(info, parameters, tempDirectory, plan);
 
         // ── 3. 转码步骤 ──
-        plan.Steps.Add(BuildTranscodeStep(
+        plan.Steps.AddRange(BuildTranscodeStep(
             info,
             parameters,
             encoder,
             effectiveAccel,
             outputPath,
-            burnSource.Path));
+            burnSource.Path,
+            tempDirectory));
 
         if (burnSource.Note is not null)
         {
@@ -257,13 +259,14 @@ public static class TranscodeCommandBuilder
         ],
     };
 
-    private static TranscodeStep BuildTranscodeStep(
+    private static IReadOnlyList<TranscodeStep> BuildTranscodeStep(
         MediaInfo info,
         TranscodeParams parameters,
         EncoderDefinition encoder,
         HwAccelKind effectiveAccel,
         string outputPath,
-        string? burnSubtitlePath)
+        string? burnSubtitlePath,
+        string tempDirectory)
     {
         var container = parameters.ContainerDefinition;
         var videoReencode = parameters.VideoMode == VideoMode.Encode && info.HasVideo;
@@ -279,7 +282,8 @@ public static class TranscodeCommandBuilder
             && string.IsNullOrWhiteSpace(parameters.PixelFormat)
             && (!string.IsNullOrWhiteSpace(filterChain.Filter) ? filterChain.IsGpuOnly : true);
 
-        var arguments = new List<string>
+        // 输入选项与输入单独持有：两遍编码的第一遍要复用同一份（滤镜链也必须一致）
+        var inputArguments = new List<string>
         {
             "-hide_banner", "-nostdin", "-loglevel", "info",
             parameters.AllowOverwrite ? "-y" : "-n",
@@ -291,26 +295,28 @@ public static class TranscodeCommandBuilder
             switch (effectiveAccel)
             {
                 case HwAccelKind.Cuda:
-                    arguments.AddRange(["-hwaccel", "cuda"]);
+                    inputArguments.AddRange(["-hwaccel", "cuda"]);
                     break;
                 case HwAccelKind.Qsv:
-                    arguments.AddRange(["-hwaccel", "qsv"]);
+                    inputArguments.AddRange(["-hwaccel", "qsv"]);
                     break;
                 case HwAccelKind.D3d11va:
-                    arguments.AddRange(["-hwaccel", "d3d11va"]);
+                    inputArguments.AddRange(["-hwaccel", "d3d11va"]);
                     break;
                 case HwAccelKind.Dxva2:
-                    arguments.AddRange(["-hwaccel", "dxva2"]);
+                    inputArguments.AddRange(["-hwaccel", "dxva2"]);
                     break;
             }
 
             if (useGpuFrames)
             {
-                arguments.AddRange(["-hwaccel_output_format", effectiveAccel == HwAccelKind.Cuda ? "cuda" : "qsv"]);
+                inputArguments.AddRange(["-hwaccel_output_format", effectiveAccel == HwAccelKind.Cuda ? "cuda" : "qsv"]);
             }
         }
 
-        arguments.AddRange(["-i", info.Path]);
+        inputArguments.AddRange(["-i", info.Path]);
+
+        var arguments = new List<string>(inputArguments);
 
         // ── 流映射 ──
         var videoStreamIndex = info.VideoStream?.Index ?? -1;
@@ -341,6 +347,8 @@ public static class TranscodeCommandBuilder
         }
 
         // ── 视频编码 ──
+        var videoArguments = new List<string>();
+        var videoArgumentsStart = arguments.Count;
         if (videoStreamIndex >= 0 && parameters.VideoMode != VideoMode.Drop)
         {
             if (parameters.VideoMode == VideoMode.Copy)
@@ -349,19 +357,44 @@ public static class TranscodeCommandBuilder
             }
             else
             {
-                arguments.AddRange(["-c:v", encoder.Id]);
-                AppendVideoQualityArguments(arguments, parameters, encoder, useGpuFrames);
+                videoArguments.AddRange(["-c:v", encoder.Id]);
+                AppendVideoQualityArguments(videoArguments, parameters, encoder, useGpuFrames);
 
                 if (!string.IsNullOrWhiteSpace(parameters.FrameRate))
                 {
-                    arguments.AddRange(["-r", parameters.FrameRate.Trim()]);
+                    videoArguments.AddRange(["-r", parameters.FrameRate.Trim()]);
                 }
 
                 if (!string.IsNullOrWhiteSpace(filterChain.Filter))
                 {
-                    arguments.AddRange(["-vf", filterChain.Filter]);
+                    videoArguments.AddRange(["-vf", filterChain.Filter]);
                 }
+
+                arguments.AddRange(videoArguments);
             }
+        }
+
+        // ── 两遍编码 ──
+        // 判定条件与预检规则一致：必须显式选了目标码率，且编码器真的支持
+        //（实测硬件编码器会把 -pass 静默忽略，只有软件编码器会写出统计文件）。
+        var twoPass = parameters.TwoPass
+                      && parameters.RateControl == RateControlKind.Bitrate
+                      && encoder.SupportsTwoPass
+                      && videoReencode;
+
+        // 两遍共用同一个统计文件前缀（ffmpeg 会自行追加 -0.log）
+        string? passLogPrefix = null;
+
+        if (twoPass)
+        {
+            passLogPrefix = Path.Combine(
+                tempDirectory,
+                "pass-" + Path.GetFileNameWithoutExtension(outputPath));
+
+            // 第二遍：按第一遍的统计结果编码
+            arguments.InsertRange(
+                videoArgumentsStart + videoArguments.Count,
+                ["-pass", "2", "-passlogfile", passLogPrefix]);
         }
 
         // ── 音频编码（按输出序号，逐个指定，避免多轨互相干扰）──
@@ -428,19 +461,51 @@ public static class TranscodeCommandBuilder
         // 输出路径必须是最后一个参数
         arguments.Add(outputPath);
 
-        return new TranscodeStep
+        var steps = new List<TranscodeStep>();
+
+        if (twoPass && passLogPrefix is not null)
+        {
+            // 第一遍：只做分析并写统计文件，不产出视频（-f null）。
+            // 滤镜链与编码参数必须与第二遍一致，否则统计结果对不上。
+            var passOne = new List<string>(inputArguments);
+            passOne.AddRange(["-map", "0:" + videoStreamIndex]);
+            passOne.AddRange(videoArguments);
+            passOne.AddRange(
+            [
+                "-pass", "1",
+                "-passlogfile", passLogPrefix,
+                "-an",
+                "-f", "null", "-",
+            ]);
+
+            steps.Add(new TranscodeStep
+            {
+                Kind = TranscodeStepKind.Transcode,
+                Label = "第一遍分析",
+                OutputPath = "-",
+                ProducesFile = false,
+                ExpectedDuration = info.Duration,
+                Arguments = passOne,
+            });
+        }
+
+        steps.Add(new TranscodeStep
         {
             Kind = TranscodeStepKind.Transcode,
-            Label = parameters.VideoMode switch
-            {
-                VideoMode.Drop => "提取音频",
-                VideoMode.Copy => "封装",
-                _ => "转码",
-            },
+            Label = twoPass
+                ? "第二遍编码"
+                : parameters.VideoMode switch
+                {
+                    VideoMode.Drop => "提取音频",
+                    VideoMode.Copy => "封装",
+                    _ => "转码",
+                },
             OutputPath = outputPath,
             ExpectedDuration = info.Duration,
             Arguments = arguments,
-        };
+        });
+
+        return steps;
     }
 
     private static void AppendVideoQualityArguments(

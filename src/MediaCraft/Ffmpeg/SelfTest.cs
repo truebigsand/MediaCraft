@@ -50,6 +50,9 @@ public static class SelfTest
         /// <summary>预期输出里的音轨条数（验证容器对多音轨的支持）。</summary>
         public int? ExpectAudioStreamCount { get; init; }
 
+        /// <summary>预期计划里的可见步骤数（用于验证两遍编码确实拆成了两步）。</summary>
+        public int? ExpectStepCount { get; init; }
+
         /// <summary>主步骤命令行里必须出现的参数片段。</summary>
         public string[] RequireArguments { get; init; } = [];
 
@@ -375,6 +378,21 @@ public static class SelfTest
                 }
 
                 foreach (var failure in matrixCase.Failures)
+                {
+                    Write($"          ! {failure}");
+                }
+
+                Write(string.Empty);
+                Write("[4c] 两遍编码支持情况校验（逐编码器看统计文件是否真有内容）");
+                var twoPassCase = await VerifyTwoPassSupportAsync(paths, workDirectory).ConfigureAwait(false);
+                results.Add(twoPassCase);
+                Write($"  {(twoPassCase.Passed ? "✓ PASS" : "✗ FAIL")}  {twoPassCase.Name}");
+                foreach (var detail in twoPassCase.Details)
+                {
+                    Write($"          {detail}");
+                }
+
+                foreach (var failure in twoPassCase.Failures)
                 {
                     Write($"          ! {failure}");
                 }
@@ -1021,6 +1039,99 @@ public static class SelfTest
         return results;
     }
 
+    /// <summary>
+    /// 逐编码器实测两遍编码支持情况，与 <see cref="EncoderDefinition.SupportsTwoPass"/> 比对。
+    ///
+    /// 必须实测的原因：硬件编码器对 -pass **不报错也不写统计文件**（实测 0 字节），
+    /// 命令返回成功 —— 靠「命令成功」判断会得出「支持」的错误结论，用户会以为做了两遍而实际没有。
+    /// 判定标准是统计文件里真的有内容。
+    /// </summary>
+    private static async Task<CaseResult> VerifyTwoPassSupportAsync(FfmpegPaths paths, string workDirectory)
+    {
+        var result = new CaseResult { Name = "两遍编码支持情况与实测一致" };
+        var probeDirectory = Path.Combine(workDirectory, "twopass");
+        Directory.CreateDirectory(probeDirectory);
+
+        // 小尺寸短素材：11 个编码器逐个探测也要够快
+        var input = Path.Combine(probeDirectory, "probe.mp4");
+        var makeInput = await ProcessRunner.RunAsync(
+            paths.Ffmpeg,
+            [
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc2=s=160x120:r=30",
+                "-f", "lavfi", "-i", "sine=f=440",
+                "-t", "1",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                input,
+            ],
+            CancellationToken.None,
+            60000).ConfigureAwait(false);
+
+        if (!makeInput.Succeeded)
+        {
+            return result.WithFailure("探测素材生成失败：" + FirstLine(makeInput.StandardError));
+        }
+
+        var mismatches = new List<string>();
+        var agreements = 0;
+
+        foreach (var encoder in EncoderCatalog.All)
+        {
+            var prefix = Path.Combine(probeDirectory, "tp-" + encoder.Id);
+            TryDelete(prefix + "-0.log");
+
+            var extra = encoder.Family switch
+            {
+                EncoderFamily.SvtAv1 => new[] { "-preset", "10" },
+                EncoderFamily.Aom => new[] { "-cpu-used", "8" },
+                _ => [],
+            };
+
+            var probe = await ProcessRunner.RunAsync(
+                paths.Ffmpeg,
+                [
+                    "-y", "-v", "error",
+                    "-i", input,
+                    "-c:v", encoder.Id,
+                    "-b:v", "200k",
+                    .. extra,
+                    "-pass", "1", "-passlogfile", prefix,
+                    "-an", "-f", "null", "-",
+                ],
+                CancellationToken.None,
+                120000).ConfigureAwait(false);
+
+            // 关键：看统计文件里有没有内容，而不是看退出码
+            var statsPath = prefix + "-0.log";
+            var statsBytes = File.Exists(statsPath) ? new FileInfo(statsPath).Length : 0;
+            var measured = statsBytes > 0;
+
+            if (measured == encoder.SupportsTwoPass)
+            {
+                agreements++;
+            }
+            else
+            {
+                mismatches.Add(
+                    $"{encoder.Id}：表里写 {(encoder.SupportsTwoPass ? "支持" : "不支持")}，" +
+                    $"实测统计文件 {statsBytes} 字节（退出码 {probe.ExitCode}）");
+            }
+        }
+
+        result.Details.Add($"探测 {EncoderCatalog.All.Count} 个编码器，与表一致 {agreements} 个");
+        result.Details.Add(
+            "支持的：" + string.Join("、", EncoderCatalog.All.Where(e => e.SupportsTwoPass).Select(e => e.Id)));
+        foreach (var mismatch in mismatches)
+        {
+            result.Failures.Add(mismatch);
+        }
+
+        TryDelete(input);
+        result.Passed = result.Failures.Count == 0;
+        return result;
+    }
+
     /// <summary>构造全部用例。</summary>
     private static List<(string Name, string SourcePath, TranscodeParams Parameters, Expectation Expectation)> BuildCases(
         Context context)    {
@@ -1238,6 +1349,26 @@ public static class SelfTest
                 ExpectEffectiveAudioBitrateKbps = 192,
             });
 
+        // ── 两遍编码：应拆成「第一遍分析 + 第二遍编码」两步 ──
+        Add(
+            "两遍编码 · x264 目标码率（两步且主步骤带 -pass 2）",
+            Base(p =>
+            {
+                p.EncoderId = "libx264";
+                p.QualityMode = QualityMode.Advanced;
+                p.RateControl = RateControlKind.Bitrate;
+                p.BitrateKbps = 800;
+                p.Preset = "veryfast";
+                p.TwoPass = true;
+            }),
+            new Expectation
+            {
+                CodecName = "h264",
+                ContainerExtension = "mp4",
+                ExpectStepCount = 2,
+                RequireArguments = ["-pass", "2"],
+            });
+
         // ── opus 直通：若编码名归一化出错，预检会强行重编码，输出音轨会变成 aac ──
         Add(
             "音频 · opus 直通 → MKV（不应被误判为不兼容）",
@@ -1427,6 +1558,15 @@ public static class SelfTest
         foreach (var note in plan.Notes)
         {
             result.Details.Add($"注：{note}");
+        }
+
+        if (expectation.ExpectStepCount is not null)
+        {
+            var visibleSteps = plan.VisibleSteps.Count();
+            if (visibleSteps != expectation.ExpectStepCount)
+            {
+                result.Failures.Add($"步骤数不符：期望 {expectation.ExpectStepCount}，实际 {visibleSteps}");
+            }
         }
 
         // 顺序执行（Prepare → 主转码 → 字幕提取）

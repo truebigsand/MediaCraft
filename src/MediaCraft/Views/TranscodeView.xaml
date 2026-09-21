@@ -264,6 +264,16 @@
                                     </StackPanel>
                                 </Grid>
 
+                                <!-- 两遍编码：需要目标码率，且只有软件编码器支持 -->
+                                <StackPanel Margin="0,8,0,0"
+                                            Visibility="{Binding IsQualityRateControl, Converter={StaticResource InverseBoolToVis}}">
+                                    <CheckBox Content="两遍编码（耗时约为单遍的两倍）"
+                                              IsChecked="{Binding Params.TwoPass, Mode=TwoWay}"
+                                              IsEnabled="{Binding CanUseTwoPass}" />
+                                    <TextBlock Text="{Binding TwoPassHint}"
+                                               Style="{StaticResource HintText}" Margin="0,2,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+
                                 <Grid Margin="0,8,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />

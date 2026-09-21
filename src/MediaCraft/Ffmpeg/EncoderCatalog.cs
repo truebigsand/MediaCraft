@@ -38,6 +38,15 @@ public sealed class EncoderDefinition
     /// <summary>使用该编码器时建议的硬解方式。</summary>
     public HwAccelKind PreferredAccel { get; init; } = HwAccelKind.None;
 
+    /// <summary>
+    /// 是否支持 ffmpeg 的两遍编码（-pass 1/2 + -passlogfile 统计文件）。
+    ///
+    /// 实测：只有软件编码器支持 —— libre x264/x265/svtav1/aom 第一遍会写出几 KB 的统计文件；
+    /// 硬件编码器（nvenc/qsv）**命令返回成功但统计文件为 0 字节**，即 -pass 被静默忽略，
+    /// 用户会以为做了两遍而实际没有。所以这个标记必须由自检逐编码器实测守住。
+    /// </summary>
+    public bool SupportsTwoPass { get; init; }
+
     /// <summary>质量参数名：-cq / -crf / -global_quality。</summary>
     public string QualityParam { get; init; } = "-crf";
 
@@ -166,6 +175,7 @@ public static class EncoderCatalog
         {
             Id = "h264_nvenc", DisplayName = "H.264 / NVENC（NVIDIA 硬编，兼容性最好）",
             Codec = "h264", Family = EncoderFamily.Nvenc, PreferredAccel = HwAccelKind.Cuda,
+            SupportsTwoPass = false,
             QualityParam = "-cq", QualityLabel = "CQ", QualityMax = 51,
             Presets = NvencPresets, DefaultPreset = "p5", Tunes = NvencTunes,
             Profiles = ["baseline", "main", "high", "high444p"],
@@ -175,6 +185,7 @@ public static class EncoderCatalog
         {
             Id = "hevc_nvenc", DisplayName = "H.265 / HEVC / NVENC（NVIDIA 硬编，体积更小）",
             Codec = "hevc", Family = EncoderFamily.Nvenc, PreferredAccel = HwAccelKind.Cuda,
+            SupportsTwoPass = false,
             QualityParam = "-cq", QualityLabel = "CQ", QualityMax = 51,
             Presets = NvencPresets, DefaultPreset = "p5", Tunes = NvencTunes,
             Profiles = ["main", "main10", "rext"],
@@ -184,6 +195,7 @@ public static class EncoderCatalog
         {
             Id = "av1_nvenc", DisplayName = "AV1 / NVENC（NVIDIA 硬编，体积最小）",
             Codec = "av1", Family = EncoderFamily.Nvenc, PreferredAccel = HwAccelKind.Cuda,
+            SupportsTwoPass = false,
             QualityParam = "-cq", QualityLabel = "CQ", QualityMax = 51,
             Presets = NvencPresets, DefaultPreset = "p5", Tunes = NvencTunes,
             Profiles = ["main"],
@@ -193,6 +205,7 @@ public static class EncoderCatalog
         {
             Id = "h264_qsv", DisplayName = "H.264 / QSV（Intel 核显硬编）",
             Codec = "h264", Family = EncoderFamily.Qsv, PreferredAccel = HwAccelKind.Qsv,
+            SupportsTwoPass = false,
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
             Presets = QsvPresets, DefaultPreset = "medium",
             Profiles = ["baseline", "main", "high"],
@@ -202,6 +215,7 @@ public static class EncoderCatalog
         {
             Id = "hevc_qsv", DisplayName = "H.265 / HEVC / QSV（Intel 核显硬编）",
             Codec = "hevc", Family = EncoderFamily.Qsv, PreferredAccel = HwAccelKind.Qsv,
+            SupportsTwoPass = false,
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
             Presets = QsvPresets, DefaultPreset = "medium",
             Profiles = ["main", "main10"],
@@ -211,6 +225,7 @@ public static class EncoderCatalog
         {
             Id = "av1_qsv", DisplayName = "AV1 / QSV（Intel Arc 硬编）",
             Codec = "av1", Family = EncoderFamily.Qsv, PreferredAccel = HwAccelKind.Qsv,
+            SupportsTwoPass = false,
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
             Presets = QsvPresets, DefaultPreset = "medium",
             Profiles = ["main"],
@@ -220,6 +235,7 @@ public static class EncoderCatalog
         {
             Id = "vp9_qsv", DisplayName = "VP9 / QSV（Intel 核显硬编）",
             Codec = "vp9", Family = EncoderFamily.Qsv, PreferredAccel = HwAccelKind.Qsv,
+            SupportsTwoPass = false,
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
             Presets = QsvPresets, DefaultPreset = "medium",
             MaxWidth = 4096, MaxHeight = 2304,
@@ -228,6 +244,7 @@ public static class EncoderCatalog
         {
             Id = "libx264", DisplayName = "H.264 / x264（CPU 软编，兼容性优先）",
             Codec = "h264", Family = EncoderFamily.X264,
+            SupportsTwoPass = true,
             QualityParam = "-crf", QualityLabel = "CRF", QualityMax = 51,
             Presets = X26xPresets, DefaultPreset = "medium", Tunes = X26xTunes,
             Profiles = ["baseline", "main", "high", "high10", "high422", "high444"],
@@ -237,6 +254,7 @@ public static class EncoderCatalog
         {
             Id = "libx265", DisplayName = "H.265 / HEVC / x265（CPU 软编）",
             Codec = "hevc", Family = EncoderFamily.X265,
+            SupportsTwoPass = true,
             QualityParam = "-crf", QualityLabel = "CRF", QualityMax = 51,
             Presets = X26xPresets, DefaultPreset = "medium",
             Tunes = ["grain", "fastdecode", "zerolatency", "animation"],
@@ -247,6 +265,7 @@ public static class EncoderCatalog
         {
             Id = "libsvtav1", DisplayName = "AV1 / SVT-AV1（CPU 软编，速度与压缩比均衡）",
             Codec = "av1", Family = EncoderFamily.SvtAv1,
+            SupportsTwoPass = true,
             QualityParam = "-crf", QualityLabel = "CRF", QualityMax = 63,
             Presets = SvtAv1Presets, DefaultPreset = "6",
             Profiles = ["main", "high", "professional"],
@@ -256,6 +275,7 @@ public static class EncoderCatalog
         {
             Id = "libaom-av1", DisplayName = "AV1 / libaom（CPU 软编，压缩比最高但很慢）",
             Codec = "av1", Family = EncoderFamily.Aom,
+            SupportsTwoPass = true,
             QualityParam = "-crf", QualityLabel = "CRF", QualityMax = 63,
             PresetParam = "-cpu-used",
             Presets = AomPresets, DefaultPreset = "6",

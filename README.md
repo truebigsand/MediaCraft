@@ -31,6 +31,7 @@
 - 参数作用域常驻可见，默认「改参数时同步到列表里所有文件」，关掉即逐文件精调；添加文件后自动选中第一个
 - 参数双模式：简单模式一个质量滑块（实时显示映射结果，如「滑块 75 → `-cq 23 -preset p5`」），
   高级模式直给原生参数（码率控制、CRF/CQ、preset/tune/profile/level/GOP、像素格式、附加参数）
+- 两遍编码（可选）：配合目标码率使用，第一遍分析、第二遍编码；软件编码器（x264 / x265 / SVT-AV1 / AOM）支持
 - 分辨率四种模式（保持、指定宽、指定高、框内只缩不放）、帧率、硬解方式可选
 - 音轨逐条处理：直通或重编码（AAC、OPUS、MP3、AC3、FLAC、Vorbis、ALAC、PCM 16/24/32bit），
   可设码率、声道、采样率。码率控件随编码器变化：有损自由填写，AC3 只给合法档位，
@@ -112,7 +113,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-fd.ps1
 ## 自检
 
 ```powershell
-# 完整自检：真跑 44 项，含 135 个容器×编码组合的兼容性矩阵
+# 完整自检：真跑 46 项，含 135 个容器×编码组合的兼容性矩阵
 .\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest all "$env:TEMP\report.txt"
 
 # 快速自检：定位、能力探测、编码器功能探测、生成测试素材（约 15 秒）

@@ -333,6 +333,35 @@ public static class PreflightValidator
             }
         }
 
+        // ── 7c. 两遍编码的前置条件 ──
+        // 实测：硬件编码器（nvenc/qsv）对 -pass 不报错但也不写统计文件，等于静默没做两遍；
+        // 质量优先模式下第二遍会直接失败。两种情况都关闭该选项并说明。
+        if (effective.TwoPass)
+        {
+            if (!encoder.SupportsTwoPass)
+            {
+                effective.TwoPass = false;
+                issues.Add(new PreflightIssue
+                {
+                    Severity = IssueSeverity.Warning,
+                    Title = "该编码器不支持两遍编码",
+                    Detail = $"{encoder.Id} 会忽略 -pass（实测统计文件为 0 字节，命令却返回成功）",
+                    AppliedFix = "已关闭两遍编码",
+                });
+            }
+            else if (effective.RateControl != RateControlKind.Bitrate)
+            {
+                effective.TwoPass = false;
+                issues.Add(new PreflightIssue
+                {
+                    Severity = IssueSeverity.Warning,
+                    Title = "两遍编码需要目标码率",
+                    Detail = "质量优先（CRF/CQ）模式下第二遍会直接失败（实测退出码非 0）",
+                    AppliedFix = "已关闭两遍编码",
+                });
+            }
+        }
+
         // ── 8a. 固定码率档位取整（AC3 等）──
         // 实测：AC3 填 200k 实际得到 192k、填 1000k 得到 640k —— ffmpeg 静默取整，
         // 界面只给合法档位，但预设/导入的 JSON 仍可能带来非法值，这里兜底并告知。

@@ -367,6 +367,13 @@ public sealed partial class TranscodeParams : ObservableObject
     [ObservableProperty]
     private string _level = string.Empty;
 
+    /// <summary>
+    /// 两遍编码（仅高级模式 + 目标码率 + 支持它的编码器）。
+    /// 第一遍只做分析并写统计文件，第二遍按统计结果编码。
+    /// </summary>
+    [ObservableProperty]
+    private bool _twoPass;
+
     /// <summary>关键帧间隔；0 = 自动。</summary>
     [ObservableProperty]
     private int _gop;
@@ -547,6 +554,7 @@ public sealed partial class TranscodeParams : ObservableObject
         FastStart = source.FastStart;
         ExtraArguments = source.ExtraArguments;
         ExternalSubtitlePath = source.ExternalSubtitlePath;
+        TwoPass = source.TwoPass;
 
         SubtitleStyle.FontName = source.SubtitleStyle.FontName;
         SubtitleStyle.FontSize = source.SubtitleStyle.FontSize;
