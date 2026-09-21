@@ -20,11 +20,12 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      # 完整自检要真跑转码，先装 ffmpeg（choco 的包是 gyan.dev full build）
+      # 完整自检要真跑转码，先装 ffmpeg。用 full build：
+      # essentials build 不带 libsvtav1 / libaom / libvpx 等编码器，矩阵用例会全被跳过
       - name: Install ffmpeg
         shell: pwsh
         run: |
-          choco install ffmpeg -y --no-progress
+          choco install ffmpeg-full -y --no-progress
           "$env:ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
           & "$env:ProgramData\chocolatey\bin\ffmpeg.exe" -version | Select-Object -First 1
 

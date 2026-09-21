@@ -424,7 +424,7 @@ public static class SelfTest
                 // ── 4b. 容器兼容性矩阵：用真实 ffmpeg 逐个探测，校验 EncoderCatalog 里的表 ──
                 Write(string.Empty);
                 Write("[4b] 容器兼容性矩阵校验（逐个组合真跑一次）");
-                var matrixCase = await VerifyContainerMatrixAsync(paths, workDirectory).ConfigureAwait(false);
+                var matrixCase = await VerifyContainerMatrixAsync(paths, workDirectory, context).ConfigureAwait(false);
                 results.Add(matrixCase);
                 Write($"  {(matrixCase.Passed ? "✓ PASS" : "✗ FAIL")}  {matrixCase.Name}");
                 foreach (var detail in matrixCase.Details)
@@ -508,11 +508,15 @@ public static class SelfTest
     /// 于是预检把用户的**无损 PCM 直通强行改成有损 AAC 192k**——用户既丢了画质又无法阻止，
     /// 比直接报错还糟。表必须由实测守住，而不是靠记忆和推测。
     /// </summary>
-    private static async Task<CaseResult> VerifyContainerMatrixAsync(FfmpegPaths paths, string workDirectory)
+    private static async Task<CaseResult> VerifyContainerMatrixAsync(
+        FfmpegPaths paths,
+        string workDirectory,
+        Context context)
     {
         var result = new CaseResult { Name = "容器兼容性矩阵与 ffmpeg 实测一致" };
         var probeDirectory = Path.Combine(workDirectory, "matrix");
         Directory.CreateDirectory(probeDirectory);
+        var skipped = new List<string>();
 
         var subtitleFile = Path.Combine(probeDirectory, "probe.srt");
         var subtitleText = "1" + Environment.NewLine +
@@ -552,6 +556,14 @@ public static class SelfTest
             {
                 foreach (var (codec, encoder) in videoEncoders)
                 {
+                    // 本机 ffmpeg 里没有这个编码器时跳过（例如 essentials build 不带 libsvtav1），
+                    // 否则「编码器不存在」会被判成「表里写错了」
+                    if (!context.Capabilities.IsEncoderAvailable(encoder))
+                    {
+                        skipped.Add($"视频 {codec}");
+                        continue;
+                    }
+
                     probes.Add((
                         $"视频 {codec} → {container.Extension}",
                         EncoderCatalog.IsVideoCodecCompatible(codec, container),
@@ -566,6 +578,12 @@ public static class SelfTest
 
             foreach (var codec in EncoderCatalog.AudioCodecs)
             {
+                if (!context.Capabilities.IsEncoderAvailable(codec.Id))
+                {
+                    skipped.Add($"音频 {codec.Id}");
+                    continue;
+                }
+
                 probes.Add((
                     $"音频 {codec.Id} → {container.Extension}",
                     EncoderCatalog.IsAudioCodecCompatible(codec.Id, container),
@@ -582,6 +600,12 @@ public static class SelfTest
             // 白名单里是规范名（ffprobe 的 codec_name），探测要换成 ffmpeg 的编码器名：
             // 直接传 "opus" 会命中实验性的原生编码器并报「experimental codecs are not enabled」。
             var multiCodec = EncoderCatalog.AudioEncoderIdFor(container.AudioCodecs.FirstOrDefault() ?? "aac");
+            if (!context.Capabilities.IsEncoderAvailable(multiCodec))
+            {
+                skipped.Add($"多音轨（{container.Extension}，{multiCodec} 不可用）");
+                continue;
+            }
+
             probes.Add((
                 $"多音轨（3 条）→ {container.Extension}",
                 container.MaxAudioStreams != 1,
@@ -653,6 +677,10 @@ public static class SelfTest
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
         result.Details.Add($"共探测 {probes.Count} 个「容器 × 编码」组合，与表一致 {agreements} 个");
+        if (skipped.Count > 0)
+        {
+            result.Details.Add($"本机 ffmpeg 缺少、已跳过 {skipped.Count} 项：" + string.Join("、", skipped.Distinct().Take(12)));
+        }
         if (mismatches.Count > 0)
         {
             foreach (var mismatch in mismatches.Take(20))
