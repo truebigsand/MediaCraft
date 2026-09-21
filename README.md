@@ -102,6 +102,19 @@
 
 ## 快速开始
 
+### 直接下载
+
+从 [Releases](https://github.com/truebigsand/MediaCraft/releases/latest) 取对应压缩包（文件名形如 `MediaCraft-<版本>-<形态>-win-x64.zip`）：
+
+| 形态 | 说明 |
+|---|---|
+| `standalone` | 自包含单文件（约 59 MB）：解压双击即用，**无需安装 .NET** |
+| `framework-dependent` | 需要 .NET 10 Desktop Runtime（解压后约 1 MB） |
+
+两者都**不含 ffmpeg**，首次启动会自动探测（见上方「环境要求」）。
+
+### 从源码构建
+
 ```powershell
 git clone https://github.com/truebigsand/MediaCraft.git
 cd MediaCraft
