@@ -113,8 +113,11 @@ public static class SelfTest
         /// <summary>opus 音轨素材（用于验证编码名归一化，避免把可直通的音轨误判为不兼容）。</summary>
         public required string OpusAudioPath { get; init; }
 
-        /// <summary>4:2:2 10bit 素材（av1_nvenc 只接受 4:2:0，用来验证自动格式转换）。</summary>
+        /// <summary>4:2:2 10bit 素材（av1_nvenc 等只收 4:2:0 的编码器，用来验证自动格式转换）。</summary>
         public required string Yuv422Path { get; init; }
+
+        /// <summary>极小素材（160x120 1 秒）：libaom-av1 编 720p 5 秒要分钟级，简单模式用例换它跑。</summary>
+        public required string TinySamplePath { get; init; }
 
         public required FfmpegPaths Paths { get; init; }
 
@@ -293,6 +296,7 @@ public static class SelfTest
             var threeAudioPath = Path.Combine(workDirectory, "sample-3audio.mkv");
             var opusAudioPath = Path.Combine(workDirectory, "sample-opus.mkv");
             var yuv422Path = Path.Combine(workDirectory, "sample-422-10bit.mkv");
+            var tinyPath = Path.Combine(workDirectory, "sample-tiny.mp4");
 
             var sampleOk = await FfmpegAsync(paths,
                 "-y", "-v", "error",
@@ -361,6 +365,17 @@ public static class SelfTest
                 yuv422Path).ConfigureAwait(false);
             Write($"  sample-422-10bit.mkv（4:2:2 10bit 视频 + PCM 音轨）: {(yuv422Ok.Ok ? "✓" : "✗ " + FirstLine(yuv422Ok.Output))}");
 
+            // 极小素材：libaom-av1 编 720p 5 秒要分钟级，给慢编码器的简单模式用例用
+            var tinyOk = await FfmpegAsync(paths,
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc2=s=160x120:r=10",
+                "-f", "lavfi", "-i", "sine=f=440",
+                "-t", "1",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                tinyPath).ConfigureAwait(false);
+            Write($"  sample-tiny.mp4（160x120 10fps 1s，慢编码器用）: {(tinyOk.Ok ? "✓" : "✗ " + FirstLine(tinyOk.Output))}");
+
             if (!sampleOk.Ok || !muxOk.Ok)
             {
                 Write("  ✗ 素材生成失败，终止。");
@@ -406,6 +421,7 @@ public static class SelfTest
                 ThreeAudioPath = threeAudioPath,
                 OpusAudioPath = opusAudioPath,
                 Yuv422Path = yuv422Path,
+                TinySamplePath = tinyPath,
                 Paths = paths,
                 Capabilities = capabilities,
                 SoftwareOnly = softwareOnly,
@@ -641,6 +657,7 @@ public static class SelfTest
         }
 
         var mismatches = new List<string>();
+        var conservative = new List<string>();
         var gate = new SemaphoreSlim(4);
         var agreements = 0;
 
@@ -660,11 +677,21 @@ public static class SelfTest
                     return;
                 }
 
-                var reason = measured ? "ffmpeg 实际支持，但表里没有" : "表里说支持，但 ffmpeg 拒绝";
-                var detail = measured ? string.Empty : FirstLine(run.StandardError);
+                // 两个方向的性质不同：
+                // - 表里说支持而实测拒绝 = 承诺了做不到，必须失败
+                // - 表里没写而实测可写 = 白名单更保守（可能因为版本差异或播放器兼容性），
+                //   只记提示 —— 例如 mp4 里的 vorbis，ffmpeg 8.1.2 能写、
+                //   但 CI 上的构建报错，我们不承诺它
                 lock (mismatches)
                 {
-                    mismatches.Add($"{probe.Label}：{reason}" + (detail.Length > 0 ? $"（{detail}）" : string.Empty));
+                    if (probe.Claimed)
+                    {
+                        mismatches.Add($"{probe.Label}：表里说支持，但 ffmpeg 拒绝（{FirstLine(run.StandardError)}）");
+                    }
+                    else
+                    {
+                        conservative.Add(probe.Label);
+                    }
                 }
             }
             finally
@@ -677,6 +704,12 @@ public static class SelfTest
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
         result.Details.Add($"共探测 {probes.Count} 个「容器 × 编码」组合，与表一致 {agreements} 个");
+        if (conservative.Count > 0)
+        {
+            result.Details.Add(
+                $"表里未列、但实测可写入 {conservative.Count} 项（白名单更保守，不视为不一致）：" +
+                string.Join("、", conservative.Take(8)));
+        }
         if (skipped.Count > 0)
         {
             result.Details.Add($"本机 ffmpeg 缺少、已跳过 {skipped.Count} 项：" + string.Join("、", skipped.Distinct().Take(12)));
@@ -1451,18 +1484,23 @@ public static class SelfTest
                 continue;
             }
 
+            // libaom-av1 极慢（720p 5 秒是分钟级），换极小素材跑，只为验证编码器本身能用。
+            // 其余编码器都用 720p 主素材（顺带覆盖真实分辨率下的产出校验）。
+            var tiny = encoder.Family == EncoderFamily.Aom;
+
             Add(
                 $"简单模式 · {encoder.DisplayName}",
                 Base(p => p.EncoderId = encoder.Id),
                 new Expectation
                 {
                     CodecName = encoder.Codec,
-                    Width = 1280,
-                    Height = 720,
-                    DurationSeconds = 5,
+                    Width = tiny ? 160 : 1280,
+                    Height = tiny ? 120 : 720,
+                    DurationSeconds = tiny ? 1 : 5,
                     ExpectAudio = true,
                     ContainerExtension = "mp4",
-                });
+                },
+                tiny ? context.TinySamplePath : null);
         }
 
         // ── 只收 4:2:0 的硬编（av1_nvenc、QSV 家族）：4:2:2 / 4:4:4 源实测直接编码会失败 ──

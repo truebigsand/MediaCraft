@@ -350,9 +350,12 @@ public static class EncoderCatalog
         {
             Extension = "mp4", DisplayName = "MP4（兼容性最好）",
             VideoCodecs = ["h264", "hevc", "av1", "vp9", "mpeg4"],
+            // vorbis 不在列表里：mp4 里的 vorbis 是实验性特性，本机 ffmpeg 8.1.2 能写、
+            // 但 CI 上的 full build 报 "Error submitting a packet to the muxer"，
+            // 行为随版本变化且播放器支持极差 —— 不兼容时预检会转 AAC 或提示换 MKV
             AudioCodecs =
             [
-                "aac", "opus", "mp3", "ac3", "flac", "vorbis", "alac",
+                "aac", "opus", "mp3", "ac3", "flac", "alac",
                 "pcm_s16le", "pcm_s24le", "pcm_s32le",
                 "pcm_s16be", "pcm_s24be", "pcm_f32le", "pcm_f64le",
             ],
@@ -377,10 +380,10 @@ public static class EncoderCatalog
             Extension = "mov", DisplayName = "MOV（苹果生态）",
             // 实测报错：「av1 only supported in MP4 and AVIF」
             VideoCodecs = ["h264", "hevc", "mpeg4"],
-            // 实测：libopus 与 flac 装不进 mov；PCM 可以
+            // 实测：libopus 与 flac 装不进 mov；PCM 可以；vorbis 与 mp4 同理（版本相关，不进白名单）
             AudioCodecs =
             [
-                "aac", "mp3", "ac3", "vorbis", "alac",
+                "aac", "mp3", "ac3", "alac",
                 "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_s16be", "pcm_s24be", "pcm_f32le", "pcm_f64le",
             ],
             SubtitleCodecs = ["mov_text"],
