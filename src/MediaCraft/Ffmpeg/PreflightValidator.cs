@@ -293,9 +293,11 @@ public static class PreflightValidator
             if (track.Action == AudioActionKind.Copy && !EncoderCatalog.IsAudioCodecCompatible(track.SourceCodec, container))
             {
                 track.Action = AudioActionKind.Encode;
-                track.CodecId = container.AudioCodecs.Contains("aac", StringComparer.OrdinalIgnoreCase)
-                    ? "aac"
-                    : container.AudioCodecs.FirstOrDefault() ?? "aac";
+                // 容器白名单是规范名，-c:a 需要编码器 id，这里做一次转换
+                track.CodecId = EncoderCatalog.AudioEncoderIdFor(
+                    container.AudioCodecs.Contains("aac", StringComparer.OrdinalIgnoreCase)
+                        ? "aac"
+                        : container.AudioCodecs.FirstOrDefault() ?? "aac");
 
                 issues.Add(new PreflightIssue
                 {
@@ -387,9 +389,7 @@ public static class PreflightValidator
         foreach (var track in effective.SubtitleTracks.Where(t =>
                      t.IsSelected && t.Action == SubtitleActionKind.Copy).ToArray())
         {
-            var compatible = container.SubtitleCodecs.Length > 0 &&
-                             (container.SubtitleCodecs.Contains("copy", StringComparer.OrdinalIgnoreCase)
-                              || IsTextSubtitle(track.SourceCodec));
+            var compatible = EncoderCatalog.CanKeepSubtitle(track.SourceCodec, container);
 
             if (!compatible)
             {
@@ -629,18 +629,16 @@ public static class PreflightValidator
             .Select(t => t.CodecId)
             .FirstOrDefault();
 
-        return codec switch
+        // 这里拿到的是编码器 id，转成与容器白名单一致的规范名再判断
+        return EncoderCatalog.CanonicalAudioCodec(codec ?? string.Empty) switch
         {
-            "libmp3lame" => "mp3",
-            "libopus" => "opus",
+            "mp3" => "mp3",
+            "opus" => "opus",
             "flac" => "flac",
-            "pcm_s16le" or "pcm_s24le" => "wav",
+            "pcm_s16le" or "pcm_s24le" or "pcm_s32le" => "wav",
             _ => "m4a",
         };
     }
-
-    private static bool IsTextSubtitle(string codec) => codec is
-        "subrip" or "srt" or "ass" or "ssa" or "mov_text" or "webvtt" or "text" or "sami" or "microdvd";
 
     private static bool PathsEqual(string a, string b)
     {

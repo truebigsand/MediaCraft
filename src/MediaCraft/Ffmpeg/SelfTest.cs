@@ -107,6 +107,9 @@ public static class SelfTest
         /// <summary>三音轨素材（用于验证容器对多音轨的支持差异）。</summary>
         public required string ThreeAudioPath { get; init; }
 
+        /// <summary>opus 音轨素材（用于验证编码名归一化，避免把可直通的音轨误判为不兼容）。</summary>
+        public required string OpusAudioPath { get; init; }
+
         public required FfmpegPaths Paths { get; init; }
 
         public required FfmpegCapabilities Capabilities { get; init; }
@@ -262,6 +265,7 @@ public static class SelfTest
             var externalSubtitlePath = Path.Combine(chineseDirectory, "外挂 字幕.srt");
             var subtitleOnlyPath = Path.Combine(workDirectory, "待转换.srt");
             var threeAudioPath = Path.Combine(workDirectory, "sample-3audio.mkv");
+            var opusAudioPath = Path.Combine(workDirectory, "sample-opus.mkv");
 
             var sampleOk = await FfmpegAsync(paths,
                 "-y", "-v", "error",
@@ -307,6 +311,16 @@ public static class SelfTest
                 threeAudioPath).ConfigureAwait(false);
             Write($"  sample-3audio.mkv（1 视频 + 3 条音轨）: {(multiAudioOk.Ok ? "✓" : "✗ " + FirstLine(multiAudioOk.Output))}");
 
+            var opusOk = await FfmpegAsync(paths,
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30",
+                "-f", "lavfi", "-i", "sine=f=440",
+                "-t", "3",
+                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                "-c:a", "libopus",
+                opusAudioPath).ConfigureAwait(false);
+            Write($"  sample-opus.mkv（视频 + opus 音轨）: {(opusOk.Ok ? "✓" : "✗ " + FirstLine(opusOk.Output))}");
+
             if (!sampleOk.Ok || !muxOk.Ok)
             {
                 Write("  ✗ 素材生成失败，终止。");
@@ -336,6 +350,7 @@ public static class SelfTest
                 ExternalSubtitlePath = externalSubtitlePath,
                 SubtitleOnlyPath = subtitleOnlyPath,
                 ThreeAudioPath = threeAudioPath,
+                OpusAudioPath = opusAudioPath,
                 Paths = paths,
                 Capabilities = capabilities,
             };
@@ -489,7 +504,9 @@ public static class SelfTest
 
             // 多音轨能力：实测 mp3 / flac / wav 只接受单条音轨，多条会直接写入失败。
             // 用容器自己支持的第一个音频编码器来探测，确保失败只可能来自「条数」而不是「编码器」。
-            var multiCodec = container.AudioCodecs.FirstOrDefault() ?? "aac";
+            // 白名单里是规范名（ffprobe 的 codec_name），探测要换成 ffmpeg 的编码器名：
+            // 直接传 "opus" 会命中实验性的原生编码器并报「experimental codecs are not enabled」。
+            var multiCodec = EncoderCatalog.AudioEncoderIdFor(container.AudioCodecs.FirstOrDefault() ?? "aac");
             probes.Add((
                 $"多音轨（3 条）→ {container.Extension}",
                 container.MaxAudioStreams != 1,
@@ -947,6 +964,60 @@ public static class SelfTest
         audioCase.Passed = audioCase.Failures.Count == 0;
         results.Add(audioCase);
 
+        // ── 8. 音频编码名归一化（曾因此把「MKV 里的 opus 直通」误判为不兼容并强行重编码）──
+        var namingCase = new CaseResult { Name = "音频 · 编码名归一化与容器判定" };
+
+        var pairs = new (string EncoderId, string ProbeName)[]
+        {
+            ("libopus", "opus"),
+            ("libmp3lame", "mp3"),
+            ("libvorbis", "vorbis"),
+            ("aac", "aac"),
+            ("flac", "flac"),
+            ("ac3", "ac3"),
+        };
+
+        foreach (var (encoderId, probeName) in pairs)
+        {
+            if (EncoderCatalog.CanonicalAudioCodec(encoderId) != probeName)
+            {
+                namingCase.Failures.Add($"CanonicalAudioCodec({encoderId}) 应为 {probeName}，实际 {EncoderCatalog.CanonicalAudioCodec(encoderId)}");
+            }
+
+            if (EncoderCatalog.AudioEncoderIdFor(probeName) != encoderId)
+            {
+                namingCase.Failures.Add($"AudioEncoderIdFor({probeName}) 应为 {encoderId}，实际 {EncoderCatalog.AudioEncoderIdFor(probeName)}");
+            }
+
+            // 两种写法必须得到同一个判定结果（这是被误判的根源）
+            var mkv = EncoderCatalog.GetContainer("mkv");
+            var byId = EncoderCatalog.IsAudioCodecCompatible(encoderId, mkv);
+            var byName = EncoderCatalog.IsAudioCodecCompatible(probeName, mkv);
+            if (byId != byName)
+            {
+                namingCase.Failures.Add($"{encoderId} / {probeName} 在 MKV 上的判定不一致：{byId} vs {byName}");
+            }
+        }
+
+        // 关键反例：opus 在 MKV 可直通、在 MOV 不行（两条都是实测结论）
+        var mkvContainer = EncoderCatalog.GetContainer("mkv");
+        var movContainer = EncoderCatalog.GetContainer("mov");
+        namingCase.Details.Add(
+            $"opus → MKV={EncoderCatalog.IsAudioCodecCompatible("opus", mkvContainer)}、" +
+            $"opus → MOV={EncoderCatalog.IsAudioCodecCompatible("opus", movContainer)}");
+        if (!EncoderCatalog.IsAudioCodecCompatible("opus", mkvContainer))
+        {
+            namingCase.Failures.Add("opus 在 MKV 上必须是兼容的（实测可直通）—— 误判会把它强行重编码");
+        }
+
+        if (EncoderCatalog.IsAudioCodecCompatible("opus", movContainer))
+        {
+            namingCase.Failures.Add("opus 在 MOV 上必须是不兼容的（实测 muxer 拒绝）");
+        }
+
+        namingCase.Passed = namingCase.Failures.Count == 0;
+        results.Add(namingCase);
+
         return results;
     }
 
@@ -1166,6 +1237,17 @@ public static class SelfTest
                 ContainerExtension = "mkv",
                 ExpectEffectiveAudioBitrateKbps = 192,
             });
+
+        // ── opus 直通：若编码名归一化出错，预检会强行重编码，输出音轨会变成 aac ──
+        Add(
+            "音频 · opus 直通 → MKV（不应被误判为不兼容）",
+            Base(p =>
+            {
+                p.VideoMode = VideoMode.Copy;
+                p.Container = "mkv";
+            }),
+            new Expectation { ContainerExtension = "mkv", ExpectAudio = true, ExpectAudioCodec = "opus" },
+            context.OpusAudioPath);
 
         // ── 多音轨：容器差异（实测 mp3/flac/wav 只接受单条音轨）──
         var threeAudioInfo = MediaProbe

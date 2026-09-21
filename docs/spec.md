@@ -158,6 +158,29 @@ mov_text → mkv               ❌  「Subtitle codec mov_text is not supported�
 注意两套命名：表里用 ffprobe 的 `codec_name`（运行时拿 `track.SourceCodec` 比对），
 探测时要用 ffmpeg 的**编码器**名——同一个东西两种叫法（`srt` = `subrip`）曾经让自检报了一次假警报。
 
+### 2.13 音频编码的两套命名（差点又是一次静默重编码）
+
+容器的音频白名单要跟 `track.SourceCodec`（ffprobe 的 `codec_name`）比对，
+而界面下拉与 `-c:a` 用的是 ffmpeg 的**编码器 id** —— 有三个编码器两边名字不同：
+
+| ffprobe codec_name | ffmpeg 编码器 id |
+|---|---|
+| `opus` | `libopus` |
+| `mp3` | `libmp3lame` |
+| `vorbis` | `libvorbis` |
+
+最初白名单里写的是编码器 id，于是「MKV 里的 opus 直通」被判成不兼容 →
+预检把它**强行重编码成 AAC**。这与 2.9 的 PCM 事件是同一类错误：**静默的有损重编码，用户既丢画质又无法阻止**。
+（有意思的是，正是当时新加的行内提示把这条错误判断显示了出来，才让它暴露的。）
+
+现在：白名单统一按 ffprobe 规范名书写，`IsAudioCodecCompatible` 两侧都做归一化
+（`CanonicalAudioCodec` / `AudioEncoderIdFor`），自检里有专门的用例锁住
+「两种写法必须得到同一判定」以及「opus 在 MKV 可直通、在 MOV 不行」。
+
+注意探测/构造时的细节：多音轨探测若把规范名当编码器名传给 `-c:a`，
+会命中 ffmpeg 的**实验性原生编码器**并报 `experimental codecs are not enabled` ——
+必须用 `AudioEncoderIdFor` 换回编码器 id。
+
 ### 2.12 容器对**多条音轨**的支持（实测）
 
 | 容器 | 多条音轨 | 实测 |
@@ -284,7 +307,7 @@ mov_text → mkv               ❌  「Subtitle codec mov_text is not supported�
 
 ## 六、自检覆盖矩阵
 
-`--selftest all` = 42 项，其中：
+`--selftest all` = 44 项，其中：
 
 **纯逻辑（不需要 ffmpeg，CI 里跑 `logic` 模式）**
 1. 内置预设清单完整性（数量、重名、引用的编码器与容器 id 必须真实存在）

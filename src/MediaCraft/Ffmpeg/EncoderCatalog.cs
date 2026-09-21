@@ -281,7 +281,7 @@ public static class EncoderCatalog
             VideoCodecs = ["h264", "hevc", "av1", "vp9", "mpeg4"],
             AudioCodecs =
             [
-                "aac", "libopus", "libmp3lame", "ac3", "flac", "libvorbis", "alac",
+                "aac", "opus", "mp3", "ac3", "flac", "vorbis", "alac",
                 "pcm_s16le", "pcm_s24le", "pcm_s32le",
             ],
             // 实测：MP4/MOV 只认 mov_text（srt/ass/webvtt 都会 "not supported"）
@@ -293,7 +293,7 @@ public static class EncoderCatalog
             VideoCodecs = ["h264", "hevc", "av1", "vp9", "mpeg4"],
             AudioCodecs =
             [
-                "aac", "libopus", "libmp3lame", "ac3", "flac", "libvorbis", "alac",
+                "aac", "opus", "mp3", "ac3", "flac", "vorbis", "alac",
                 "pcm_s16le", "pcm_s24le", "pcm_s32le",
             ],
             // 实测：matroska 不支持 mov_text，所以这里没有它；copy 表示原样内封（PGS 等图形字幕也能装）
@@ -307,7 +307,7 @@ public static class EncoderCatalog
             // 实测：libopus 与 flac 装不进 mov；PCM 可以
             AudioCodecs =
             [
-                "aac", "libmp3lame", "ac3", "libvorbis", "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+                "aac", "mp3", "ac3", "vorbis", "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le",
             ],
             SubtitleCodecs = ["mov_text"],
         },
@@ -316,7 +316,7 @@ public static class EncoderCatalog
             Extension = "webm", DisplayName = "WebM（网页内嵌）",
             VideoCodecs = ["vp9", "av1"],
             // 实测报错：「Only VP8 or VP9 or AV1 video and Vorbis or Opus audio and WebVTT subtitles」
-            AudioCodecs = ["libopus", "libvorbis"],
+            AudioCodecs = ["opus", "vorbis"],
             SubtitleCodecs = ["webvtt"],
         },
         new ContainerDefinition
@@ -327,14 +327,14 @@ public static class EncoderCatalog
         new ContainerDefinition
         {
             Extension = "mp3", DisplayName = "MP3（纯音频）", VideoCapable = false,
-            AudioCodecs = ["libmp3lame"],
+            AudioCodecs = ["mp3"],
             // 实测只接受单条音轨
             MaxAudioStreams = 1,
         },
         new ContainerDefinition
         {
             Extension = "opus", DisplayName = "OPUS（纯音频）", VideoCapable = false,
-            AudioCodecs = ["libopus", "flac", "libvorbis"],
+            AudioCodecs = ["opus", "flac", "vorbis"],
         },
         new ContainerDefinition
         {
@@ -350,7 +350,7 @@ public static class EncoderCatalog
             MaxAudioStreams = 1,
             AudioCodecs =
             [
-                "aac", "libmp3lame", "ac3", "flac", "libvorbis", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+                "aac", "mp3", "ac3", "flac", "vorbis", "pcm_s16le", "pcm_s24le", "pcm_s32le",
             ],
         },
     ];
@@ -393,6 +393,31 @@ public static class EncoderCatalog
         // 界面上的数字要和别的工具看到的一致。
         return (int)(sampleRate * (long)bitDepth * channels / 1000);
     }
+
+    /// <summary>
+    /// 音频编码的两套命名归一化。
+    ///
+    /// 容器白名单按 **ffprobe 的 codec_name** 书写（因为要跟 track.SourceCodec 比对），
+    /// 而界面下拉与 -c:a 用的是 **ffmpeg 编码器 id**。三个编码器两边名字不同：
+    /// opus/libopus、mp3/libmp3lame、vorbis/libvorbis。
+    /// 混用会导致「MKV 装不下 opus」这类误判 —— 预检会把本可直通的音轨强行重编码（丢画质）。
+    /// </summary>
+    public static string CanonicalAudioCodec(string nameOrId) => nameOrId switch
+    {
+        "libopus" => "opus",
+        "libmp3lame" => "mp3",
+        "libvorbis" => "vorbis",
+        _ => nameOrId,
+    };
+
+    /// <summary>规范名 → 可直接传给 -c:a 的编码器 id。</summary>
+    public static string AudioEncoderIdFor(string canonical) => canonical switch
+    {
+        "opus" => "libopus",
+        "mp3" => "libmp3lame",
+        "vorbis" => "libvorbis",
+        _ => canonical,
+    };
 
     /// <summary>取离目标最近的合法档位。</summary>
     public static int NearestBitrate(int[] options, int target)
@@ -537,14 +562,38 @@ public static class EncoderCatalog
     public static bool IsVideoCodecCompatible(string codec, ContainerDefinition container) =>
         !container.VideoCapable || container.VideoCodecs.Contains(codec, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>容器是否支持该音频编码器。</summary>
-    public static bool IsAudioCodecCompatible(string audioCodecId, ContainerDefinition container) =>
-        container.AudioCodecs.Contains(audioCodecId, StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// 容器是否支持该音频编码。传编码器 id（libopus）或 ffprobe 名（opus）都可以 —— 内部先归一化。
+    /// </summary>
+    public static bool IsAudioCodecCompatible(string audioCodecNameOrId, ContainerDefinition container) =>
+        container.AudioCodecs.Contains(CanonicalAudioCodec(audioCodecNameOrId), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>容器是否支持内封该字幕编码。</summary>
     public static bool IsSubtitleCodecCompatible(string subtitleCodec, ContainerDefinition container) =>
         container.SubtitleCodecs.Contains(subtitleCodec, StringComparer.OrdinalIgnoreCase) ||
         container.SubtitleCodecs.Contains("copy", StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 该容器能否原样内封这个字幕编码。
+    /// 预检规则与界面提示共用这一个判定，避免两处逻辑不一致。
+    /// </summary>
+    public static bool CanKeepSubtitle(string subtitleCodec, ContainerDefinition container)
+    {
+        if (container.SubtitleCodecs.Length == 0)
+        {
+            return false;
+        }
+
+        if (container.SubtitleCodecs.Contains("copy", StringComparer.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var isText = subtitleCodec is
+            "subrip" or "srt" or "ass" or "ssa" or "mov_text" or "webvtt" or "text" or "sami" or "microdvd";
+
+        return isText && container.SubtitleCodecs.Contains("mov_text", StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>该编码器是否支持指定的像素格式（判断 10bit 兼容性）。</summary>
     public static bool SupportsPixelFormat(EncoderDefinition encoder, string pixelFormat)

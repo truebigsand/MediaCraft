@@ -676,9 +676,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
         try
         {
-            // 轨道上的「预检已调整…」说明只在刚发生修正后有意义，
-            // 每次预检先清空，避免改了容器之后留下过期提示。
-            ClearTrackPreflightNotes();
+            UpdateTrackPreflightNotes();
             RefreshAudioTrackUi();
 
             var outputPath = OutputPathBuilder.Build(info, Params, _settings.Current.DefaultOutputDirectory);
@@ -724,45 +722,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
         {
             var container = Params.ContainerDefinition;
 
-            // 先逐条比对，写清楚「哪条轨被改成了什么、为什么」
-            for (var index = 0; index < Params.AudioTracks.Count && index < result.Effective.AudioTracks.Count; index++)
-            {
-                var before = Params.AudioTracks[index];
-                var after = result.Effective.AudioTracks[index];
-
-                if (before.Action == after.Action &&
-                    string.Equals(before.CodecId, after.CodecId, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var reason = after.Action == AudioActionKind.Encode &&
-                             !EncoderCatalog.IsAudioCodecCompatible(before.SourceCodec, container)
-                    ? $"{container.Extension.ToUpperInvariant()} 装不下 {before.SourceCodec}"
-                    : "与容器不兼容";
-
-                before.PreflightNote =
-                    $"预检已调整：{DescribeAudioAction(before)} → {DescribeAudioAction(after)}（{reason}）";
-            }
-
-            for (var index = 0; index < Params.SubtitleTracks.Count && index < result.Effective.SubtitleTracks.Count; index++)
-            {
-                var before = Params.SubtitleTracks[index];
-                var after = result.Effective.SubtitleTracks[index];
-
-                if (before.Action == after.Action)
-                {
-                    continue;
-                }
-
-                var reason = after.Action == SubtitleActionKind.Drop
-                    ? $"{container.Extension.ToUpperInvariant()} 不支持 {before.SourceCodec} 字幕"
-                    : "与容器不兼容";
-
-                before.PreflightNote =
-                    $"预检已调整：{DescribeSubtitleAction(before)} → {DescribeSubtitleAction(after)}（{reason}）";
-            }
-
+            // 轨道提示由 UpdateTrackPreflightNotes 按状态推导，这里只负责把修正搬回参数
             Params.CopyScalarsFrom(result.Effective);
             Params.ApplyTracksFrom(result.Effective);
             Params.OutputDirectory = result.Effective.OutputDirectory;
@@ -859,34 +819,53 @@ public sealed partial class TranscodeViewModel : ObservableObject
         return "无损压缩：体积取决于内容（一般约为未压缩 PCM 的 50-70%），没有码率参数可设";
     }
 
-    /// <summary>清空所有轨道上的预检说明。</summary>
-    private void ClearTrackPreflightNotes()
+    /// <summary>
+    /// 按**当前状态推导**轨道上的提示（容器限制住了什么）。
+    ///
+    /// 不能写成「发生修正时写一次」：每轮预检开头会重算，那种写法会让提示在
+    /// 写回参数后的第二轮预检里被擦掉，表现为**闪一下就没了**；
+    /// 而且改回兼容容器后还会留下过期提示。推导式则天然满足：
+    /// 条件成立就一直在，条件消失就自动没有。
+    ///
+    /// 措辞不声称「是我们改的」：用户也可能是自己选了重编码，
+    /// 只陈述事实与出路（要直通就换支持的容器）。
+    /// </summary>
+    private void UpdateTrackPreflightNotes()
     {
+        var container = Params.ContainerDefinition;
+        var containerName = container.DisplayName.Split('（')[0];
+
         foreach (var track in Params.AudioTracks)
         {
             track.PreflightNote = string.Empty;
+
+            if (EncoderCatalog.IsAudioCodecCompatible(track.SourceCodec, container))
+            {
+                continue;
+            }
+
+            // 容器装不下源音频编码：只能重编码，直通需要换容器
+            track.PreflightNote = track.Action == AudioActionKind.Drop
+                ? string.Empty
+                : $"{containerName} 装不下 {track.SourceCodec}：" +
+                  $"要保留这条音轨只能重编码为 {track.CodecId}（换成支持它的容器即可直通）";
         }
 
         foreach (var track in Params.SubtitleTracks)
         {
             track.PreflightNote = string.Empty;
+
+            if (EncoderCatalog.CanKeepSubtitle(track.SourceCodec, container))
+            {
+                continue;
+            }
+
+            if (track.Action == SubtitleActionKind.Drop)
+            {
+                track.PreflightNote = $"{containerName} 不支持 {track.SourceCodec} 字幕，这条已丢弃（换 MKV 可内封）";
+            }
         }
     }
-
-    private static string DescribeAudioAction(AudioTrackParams track) => track.Action switch
-    {
-        AudioActionKind.Copy => "直通",
-        AudioActionKind.Encode => $"重编码 {track.CodecId}",
-        _ => "丢弃",
-    };
-
-    private static string DescribeSubtitleAction(SubtitleTrackParams track) => track.Action switch
-    {
-        SubtitleActionKind.Copy => "内封保留",
-        SubtitleActionKind.Burn => "烧入画面",
-        SubtitleActionKind.Extract => "提取为文件",
-        _ => "丢弃",
-    };
 
     private void ScheduleRevalidate()
     {
