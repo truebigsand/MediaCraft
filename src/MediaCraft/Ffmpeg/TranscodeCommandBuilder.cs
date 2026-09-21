@@ -374,16 +374,26 @@ public static class TranscodeCommandBuilder
                 continue;
             }
 
-            var codecId = string.IsNullOrWhiteSpace(track.CodecId) ? "aac" : track.CodecId;
-            arguments.AddRange([$"-c:a:{index}", codecId]);
-            if (track.BitRateKbps > 0)
+            var codec = EncoderCatalog.GetAudioCodec(track.CodecId);
+            arguments.AddRange([$"-c:a:{index}", codec.Id]);
+
+            // 无损编码器（PCM/FLAC/ALAC）不传码率：实测 ffmpeg 会静默忽略它
+            //（同输入加不加 -b:a 产出字节完全一致），传了只会误导人。
+            if (!codec.IsLossless && track.BitRateKbps > 0)
             {
                 arguments.AddRange([$"-b:a:{index}", track.BitRateKbps + "k"]);
             }
 
+            // 注意流说明符必须带音频类型：`-ac:0` 会被理解为「输出流 0」（那是视频流）而被忽略，
+            // 必须写 `-ac:a:0`（与 -c:a:N / -b:a:N 一致）。这个错曾经让声道选项静默失效。
             if (track.TargetChannels > 0)
             {
-                arguments.AddRange([$"-ac:{index}", track.TargetChannels.ToString()]);
+                arguments.AddRange([$"-ac:a:{index}", track.TargetChannels.ToString()]);
+            }
+
+            if (track.SampleRate > 0)
+            {
+                arguments.AddRange([$"-ar:a:{index}", track.SampleRate.ToString()]);
             }
         }
 

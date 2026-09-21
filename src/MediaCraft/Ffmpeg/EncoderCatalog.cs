@@ -94,6 +94,9 @@ public sealed class ContainerDefinition
 
     /// <summary>该容器允许的字幕编码器；空数组表示不支持内封字幕。</summary>
     public string[] SubtitleCodecs { get; init; } = [];
+
+    /// <summary>下拉框的可访问名称。</summary>
+    public override string ToString() => DisplayName;
 }
 
 /// <summary>音频编码器定义。</summary>
@@ -102,6 +105,34 @@ public sealed class AudioCodecDefinition
     public required string Id { get; init; }
 
     public required string DisplayName { get; init; }
+
+    /// <summary>
+    /// 无损编码：码率由采样率/位深/声道决定（PCM）或取决于内容（FLAC/ALAC），
+    /// 因此 `-b:a` 对它没有意义 —— 实测 ffmpeg 会静默忽略（同一输入加不加 -b:a 产出字节完全一致）。
+    /// 界面对这类编码器隐藏码率输入。
+    /// </summary>
+    public bool IsLossless { get; init; }
+
+    /// <summary>
+    /// 固定码率档位；空数组 = 自由填。AC3 是固定档位集合，
+    /// 实测填入非法值会被 ffmpeg **静默取整**（200k → 192k，1000k → 640k），所以界面只给合法档位。
+    /// </summary>
+    public int[] BitrateOptions { get; init; } = [];
+
+    /// <summary>选中该编码器时的默认码率（无损忽略）。</summary>
+    public int DefaultBitrateKbps { get; init; } = 192;
+
+    /// <summary>下拉框的可访问名称。</summary>
+    public override string ToString() => DisplayName;
+
+    /// <summary>PCM 的位深；非 PCM 返回 0。</summary>
+    public static int PcmBitDepth(string codecId) => codecId switch
+    {
+        "pcm_s16le" => 16,
+        "pcm_s24le" => 24,
+        "pcm_s32le" => 32,
+        _ => 0,
+    };
 }
 
 /// <summary>
@@ -243,7 +274,8 @@ public static class EncoderCatalog
             VideoCodecs = ["h264", "hevc", "av1", "vp9", "mpeg4"],
             AudioCodecs =
             [
-                "aac", "libopus", "libmp3lame", "ac3", "flac", "libvorbis", "alac", "pcm_s16le", "pcm_s24le",
+                "aac", "libopus", "libmp3lame", "ac3", "flac", "libvorbis", "alac",
+                "pcm_s16le", "pcm_s24le", "pcm_s32le",
             ],
             // 实测：MP4/MOV 只认 mov_text（srt/ass/webvtt 都会 "not supported"）
             SubtitleCodecs = ["mov_text"],
@@ -254,7 +286,8 @@ public static class EncoderCatalog
             VideoCodecs = ["h264", "hevc", "av1", "vp9", "mpeg4"],
             AudioCodecs =
             [
-                "aac", "libopus", "libmp3lame", "ac3", "flac", "libvorbis", "alac", "pcm_s16le", "pcm_s24le",
+                "aac", "libopus", "libmp3lame", "ac3", "flac", "libvorbis", "alac",
+                "pcm_s16le", "pcm_s24le", "pcm_s32le",
             ],
             // 实测：matroska 不支持 mov_text，所以这里没有它；copy 表示原样内封（PGS 等图形字幕也能装）
             SubtitleCodecs = ["subrip", "ass", "webvtt", "copy"],
@@ -265,7 +298,10 @@ public static class EncoderCatalog
             // 实测报错：「av1 only supported in MP4 and AVIF」
             VideoCodecs = ["h264", "hevc", "mpeg4"],
             // 实测：libopus 与 flac 装不进 mov；PCM 可以
-            AudioCodecs = ["aac", "libmp3lame", "ac3", "libvorbis", "alac", "pcm_s16le", "pcm_s24le"],
+            AudioCodecs =
+            [
+                "aac", "libmp3lame", "ac3", "libvorbis", "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+            ],
             SubtitleCodecs = ["mov_text"],
         },
         new ContainerDefinition
@@ -299,23 +335,71 @@ public static class EncoderCatalog
         new ContainerDefinition
         {
             Extension = "wav", DisplayName = "WAV（未压缩音频）", VideoCapable = false,
-            AudioCodecs = ["aac", "libmp3lame", "ac3", "flac", "libvorbis", "pcm_s16le", "pcm_s24le"],
+            AudioCodecs =
+            [
+                "aac", "libmp3lame", "ac3", "flac", "libvorbis", "pcm_s16le", "pcm_s24le", "pcm_s32le",
+            ],
         },
     ];
+
+    /// <summary>AC3 的合法码率档位（实测非法值会被静默取整）。</summary>
+    private static readonly int[] Ac3Bitrates =
+        [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640];
 
     /// <summary>可选音频编码器。</summary>
     public static IReadOnlyList<AudioCodecDefinition> AudioCodecs { get; } =
     [
-        new AudioCodecDefinition { Id = "aac", DisplayName = "AAC（通用，推荐）" },
-        new AudioCodecDefinition { Id = "libopus", DisplayName = "OPUS（体积小、延迟低）" },
-        new AudioCodecDefinition { Id = "libmp3lame", DisplayName = "MP3" },
-        new AudioCodecDefinition { Id = "ac3", DisplayName = "AC3（家庭影院）" },
-        new AudioCodecDefinition { Id = "flac", DisplayName = "FLAC（无损）" },
-        new AudioCodecDefinition { Id = "libvorbis", DisplayName = "Vorbis" },
-        new AudioCodecDefinition { Id = "alac", DisplayName = "ALAC（苹果无损）" },
-        new AudioCodecDefinition { Id = "pcm_s16le", DisplayName = "PCM 16bit（未压缩）" },
-        new AudioCodecDefinition { Id = "pcm_s24le", DisplayName = "PCM 24bit（未压缩）" },
+        new AudioCodecDefinition { Id = "aac", DisplayName = "AAC（通用，推荐）", DefaultBitrateKbps = 192 },
+        new AudioCodecDefinition { Id = "libopus", DisplayName = "OPUS（体积小、延迟低）", DefaultBitrateKbps = 128 },
+        new AudioCodecDefinition { Id = "libmp3lame", DisplayName = "MP3", DefaultBitrateKbps = 192 },
+        new AudioCodecDefinition
+        {
+            Id = "ac3", DisplayName = "AC3（家庭影院，固定码率档位）",
+            BitrateOptions = Ac3Bitrates, DefaultBitrateKbps = 192,
+        },
+        new AudioCodecDefinition { Id = "flac", DisplayName = "FLAC（无损压缩）", IsLossless = true },
+        new AudioCodecDefinition { Id = "libvorbis", DisplayName = "Vorbis", DefaultBitrateKbps = 192 },
+        new AudioCodecDefinition { Id = "alac", DisplayName = "ALAC（苹果无损压缩）", IsLossless = true },
+        new AudioCodecDefinition { Id = "pcm_s16le", DisplayName = "PCM 16bit（无损未压缩）", IsLossless = true },
+        new AudioCodecDefinition { Id = "pcm_s24le", DisplayName = "PCM 24bit（无损未压缩）", IsLossless = true },
+        new AudioCodecDefinition { Id = "pcm_s32le", DisplayName = "PCM 32bit（无损未压缩）", IsLossless = true },
     ];
+
+    /// <summary>
+    /// 未压缩 PCM 的码率：采样率 × 位深 × 声道数。
+    /// 实测本机 pcm_s24le 44.1kHz 立体声 = 2116 kbps，与该公式精确吻合。
+    /// </summary>
+    public static int ComputePcmBitrate(int sampleRate, int bitDepth, int channels)
+    {
+        if (sampleRate <= 0 || bitDepth <= 0 || channels <= 0)
+        {
+            return 0;
+        }
+
+        // 截断而不是四舍五入：ffprobe 报 2116 kbps 而 44100×24×2 = 2116.8 kbps，
+        // 界面上的数字要和别的工具看到的一致。
+        return (int)(sampleRate * (long)bitDepth * channels / 1000);
+    }
+
+    /// <summary>取离目标最近的合法档位。</summary>
+    public static int NearestBitrate(int[] options, int target)
+    {
+        if (options.Length == 0)
+        {
+            return target;
+        }
+
+        var best = options[0];
+        foreach (var option in options)
+        {
+            if (Math.Abs(option - target) < Math.Abs(best - target))
+            {
+                best = option;
+            }
+        }
+
+        return best;
+    }
 
     /// <summary>简单模式滑块 → 原生质量值的锚点（滑块值 → 占质量区间上限的比例）。</summary>
     private static readonly (int Slider, double Fraction)[] QualityAnchors =

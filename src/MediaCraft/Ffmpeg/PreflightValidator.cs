@@ -307,6 +307,34 @@ public static class PreflightValidator
             }
         }
 
+        // ── 8a. 固定码率档位取整（AC3 等）──
+        // 实测：AC3 填 200k 实际得到 192k、填 1000k 得到 640k —— ffmpeg 静默取整，
+        // 界面只给合法档位，但预设/导入的 JSON 仍可能带来非法值，这里兜底并告知。
+        foreach (var track in effective.AudioTracks.Where(t => t.IsSelected && t.Action == AudioActionKind.Encode).ToArray())
+        {
+            var codec = EncoderCatalog.GetAudioCodec(track.CodecId);
+            if (codec.IsLossless || codec.BitrateOptions.Length == 0 || track.BitRateKbps <= 0)
+            {
+                continue;
+            }
+
+            if (codec.BitrateOptions.Contains(track.BitRateKbps))
+            {
+                continue;
+            }
+
+            var nearest = EncoderCatalog.NearestBitrate(codec.BitrateOptions, track.BitRateKbps);
+            var original = track.BitRateKbps;
+            track.BitRateKbps = nearest;
+            issues.Add(new PreflightIssue
+            {
+                Severity = IssueSeverity.Warning,
+                Title = "码率不在合法档位",
+                Detail = $"{codec.DisplayName.Split('（')[0]} 只支持固定码率档位，{original} kbps 不是其中之一",
+                AppliedFix = $"音频 #{track.StreamIndex} 已取整到 {nearest} kbps",
+            });
+        }
+
         // ── 8b. PCM 直通到 MP4/MOV 的兼容性提示 ──
         // ffmpeg 实测允许这样写（muxer 接受），但相当多硬件播放器/电视不认 PCM-in-MP4。
         // 这属于兼容性提醒而不是硬限制，所以只提示、绝不改动用户的直通选择

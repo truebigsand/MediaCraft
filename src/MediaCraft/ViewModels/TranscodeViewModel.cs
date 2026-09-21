@@ -679,6 +679,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
             // 轨道上的「预检已调整…」说明只在刚发生修正后有意义，
             // 每次预检先清空，避免改了容器之后留下过期提示。
             ClearTrackPreflightNotes();
+            RefreshAudioTrackUi();
 
             var outputPath = OutputPathBuilder.Build(info, Params, _settings.Current.DefaultOutputDirectory);
             var result = PreflightValidator.Validate(info, Params, _ffmpeg.Capabilities, outputPath);
@@ -777,6 +778,81 @@ public sealed partial class TranscodeViewModel : ObservableObject
         {
             _applyingPreflightFix = false;
         }
+    }
+
+    /// <summary>
+    /// 按所选音频编码器调整码率控件形态：
+    /// - 无损（PCM / FLAC / ALAC）：不显示码率输入，改为显示「实际会得到什么」
+    ///   （PCM 能直接算出来；FLAC/ALAC 是压缩的无损，只能说体积取决于内容）
+    /// - 固定档位（AC3）：只给合法档位（实测非法值会被 ffmpeg 静默取整）
+    /// - 有损自由编码器：保持输入框
+    /// </summary>
+    private void RefreshAudioTrackUi()
+    {
+        var info = SelectedFile?.Info;
+
+        foreach (var track in Params.AudioTracks)
+        {
+            var codec = EncoderCatalog.GetAudioCodec(track.CodecId);
+
+            // 源参数：界面提示与无损码率换算都要用
+            var stream = info?.AudioStreams.FirstOrDefault(s => s.Index == track.StreamIndex);
+            if (stream is not null)
+            {
+                track.SourceSampleRate = stream.SampleRate;
+                track.SourceChannels = stream.Channels;
+            }
+
+            if (codec.IsLossless)
+            {
+                track.BitrateMode = AudioBitrateMode.NotApplicable;
+                track.BitrateOptions = [];
+                track.BitrateNote = BuildLosslessNote(track, codec);
+                continue;
+            }
+
+            track.BitrateNote = string.Empty;
+
+            if (codec.BitrateOptions.Length > 0)
+            {
+                track.BitrateMode = AudioBitrateMode.Fixed;
+                track.BitrateOptions = codec.BitrateOptions;
+
+                if (track.BitRateKbps <= 0 || !codec.BitrateOptions.Contains(track.BitRateKbps))
+                {
+                    track.BitRateKbps = EncoderCatalog.NearestBitrate(
+                        codec.BitrateOptions,
+                        track.BitRateKbps > 0 ? track.BitRateKbps : codec.DefaultBitrateKbps);
+                }
+
+                continue;
+            }
+
+            track.BitrateMode = AudioBitrateMode.Free;
+            track.BitrateOptions = [];
+
+            if (track.BitRateKbps <= 0)
+            {
+                track.BitRateKbps = codec.DefaultBitrateKbps;
+            }
+        }
+    }
+
+    /// <summary>无损编码器的实际码率/体积说明。</summary>
+    private static string BuildLosslessNote(AudioTrackParams track, AudioCodecDefinition codec)
+    {
+        var effectiveRate = track.SampleRate > 0 ? track.SampleRate : track.SourceSampleRate;
+        var effectiveChannels = track.TargetChannels > 0 ? track.TargetChannels : track.SourceChannels;
+        var scope = track.SampleRate > 0 || track.TargetChannels > 0 ? "按你设的目标参数" : "按源参数";
+
+        var bitDepth = AudioCodecDefinition.PcmBitDepth(codec.Id);
+        if (bitDepth > 0 && effectiveRate > 0 && effectiveChannels > 0)
+        {
+            var kbps = EncoderCatalog.ComputePcmBitrate(effectiveRate, bitDepth, effectiveChannels);
+            return $"无损未压缩：{bitDepth}bit · {effectiveChannels}ch · {effectiveRate} Hz → {kbps} kbps（{scope}）";
+        }
+
+        return "无损压缩：体积取决于内容（一般约为未压缩 PCM 的 50-70%），没有码率参数可设";
     }
 
     /// <summary>清空所有轨道上的预检说明。</summary>

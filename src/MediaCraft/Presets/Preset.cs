@@ -142,6 +142,9 @@ public sealed class Preset
     [JsonIgnore]
     public string IntentSummary => Intent.Description;
 
+    /// <summary>下拉框/列表里的可访问名称（见 NamedOption 的说明）。</summary>
+    public override string ToString() => Name;
+
     /// <summary>完整说明（名称 + 描述 + 摘要），用于列表与提示。</summary>
     [JsonIgnore]
     public string FullDescription

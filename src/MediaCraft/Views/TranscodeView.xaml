@@ -386,25 +386,73 @@
                                             </DockPanel>
                                             <Grid Margin="20,4,0,0"
                                                   Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="132" />
                                                     <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
-                                                <ComboBox Grid.Column="0"
+
+                                                <ComboBox Grid.Row="0" Grid.Column="0"
                                                           ItemsSource="{x:Static vm:Options.AudioActions}"
                                                           DisplayMemberPath="Name"
                                                           SelectedValuePath="Value"
                                                           SelectedValue="{Binding Action, Mode=TwoWay}" />
-                                                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="6,0,0,0"
+
+                                                <!-- 编码器 + 码率控件（形态随所选编码器变化） -->
+                                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="6,0,0,0"
                                                             Visibility="{Binding Action, Converter={StaticResource EnumToVis}, ConverterParameter=Encode}">
-                                                    <ComboBox Width="150"
+                                                    <ComboBox Width="176"
                                                               ItemsSource="{Binding DataContext.AudioCodecs, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                               DisplayMemberPath="DisplayName"
                                                               SelectedValuePath="Id"
                                                               SelectedValue="{Binding CodecId, Mode=TwoWay}" />
-                                                    <TextBox Width="62" Margin="6,0,0,0" Text="{Binding BitRateKbps, Mode=TwoWay}" ToolTip="码率 kbps" />
-                                                    <TextBlock Text="kbps" VerticalAlignment="Center" Margin="4,0,0,0" Style="{StaticResource HintText}" />
+
+                                                    <!-- 有损·自由填 -->
+                                                    <TextBox Width="58" Margin="6,0,0,0"
+                                                             Text="{Binding BitRateKbps, Mode=TwoWay}"
+                                                             ToolTip="码率 kbps"
+                                                             Visibility="{Binding BitrateMode, Converter={StaticResource EnumToVis}, ConverterParameter=Free}" />
+                                                    <TextBlock Text="kbps" VerticalAlignment="Center" Margin="4,0,0,0"
+                                                               Style="{StaticResource HintText}"
+                                                               Visibility="{Binding BitrateMode, Converter={StaticResource EnumToVis}, ConverterParameter=Free}" />
+
+                                                    <!-- 有损·固定档位（AC3） -->
+                                                    <ComboBox Width="92" Margin="6,0,0,0"
+                                                              ItemsSource="{Binding BitrateOptions}"
+                                                              SelectedItem="{Binding BitRateKbps, Mode=TwoWay}"
+                                                              Visibility="{Binding BitrateMode, Converter={StaticResource EnumToVis}, ConverterParameter=Fixed}" />
+                                                    <TextBlock Text="kbps" VerticalAlignment="Center" Margin="4,0,0,0"
+                                                               Style="{StaticResource HintText}"
+                                                               Visibility="{Binding BitrateMode, Converter={StaticResource EnumToVis}, ConverterParameter=Fixed}" />
+
+                                                    <!-- 无损：显示实际码率或说明 -->
+                                                    <TextBlock Text="{Binding BitrateNote}"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="11"
+                                                               Foreground="{StaticResource MutedBrush}"
+                                                               TextWrapping="Wrap"
+                                                               MaxWidth="240"
+                                                               Visibility="{Binding BitrateMode, Converter={StaticResource EnumToVis}, ConverterParameter=NotApplicable}" />
+                                                </StackPanel>
+
+                                                <!-- 声道与采样率（无损/有损都适用；无损时这两项决定实际码率） -->
+                                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="6,4,0,0"
+                                                            Visibility="{Binding Action, Converter={StaticResource EnumToVis}, ConverterParameter=Encode}">
+                                                    <TextBlock Text="声道" VerticalAlignment="Center" Style="{StaticResource HintText}" Margin="0,0,4,0" />
+                                                    <ComboBox Width="118"
+                                                              ItemsSource="{x:Static vm:Options.AudioChannels}"
+                                                              DisplayMemberPath="Name"
+                                                              SelectedValuePath="Value"
+                                                              SelectedValue="{Binding TargetChannels, Mode=TwoWay}" />
+                                                    <TextBlock Text="采样率" VerticalAlignment="Center" Style="{StaticResource HintText}" Margin="10,0,4,0" />
+                                                    <ComboBox Width="140"
+                                                              ItemsSource="{x:Static vm:Options.SampleRates}"
+                                                              DisplayMemberPath="Name"
+                                                              SelectedValuePath="Value"
+                                                              SelectedValue="{Binding SampleRate, Mode=TwoWay}" />
                                                 </StackPanel>
                                             </Grid>
                                             <TextBlock Text="{Binding PreflightNote}"

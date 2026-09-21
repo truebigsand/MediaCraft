@@ -9,6 +9,12 @@ public sealed class NamedOption<T>
     public required T Value { get; init; }
 
     public required string Name { get; init; }
+
+    /// <summary>
+    /// 界面下拉框必须重写 ToString：WPF 的自动化peer对非字符串项用 ToString() 作为可访问名称，
+    /// 不重写的话屏幕阅读器（以及 UI 自动化）读到的是类名 `NamedOption`1[MediaCraft.Media.HwAccelKind]`。
+    /// </summary>
+    public override string ToString() => Name;
 }
 
 /// <summary>
@@ -69,6 +75,30 @@ public static class Options
         new NamedOption<SubtitleFormat> { Value = SubtitleFormat.Srt, Name = "SRT" },
         new NamedOption<SubtitleFormat> { Value = SubtitleFormat.Ass, Name = "ASS" },
         new NamedOption<SubtitleFormat> { Value = SubtitleFormat.Vtt, Name = "VTT" },
+    ];
+
+    /// <summary>目标声道数（0 = 保持源声道）。</summary>
+    public static IReadOnlyList<NamedOption<int>> AudioChannels { get; } =
+    [
+        new NamedOption<int> { Value = 0, Name = "保持源声道" },
+        new NamedOption<int> { Value = 1, Name = "单声道" },
+        new NamedOption<int> { Value = 2, Name = "立体声" },
+        new NamedOption<int> { Value = 6, Name = "5.1" },
+        new NamedOption<int> { Value = 8, Name = "7.1" },
+    ];
+
+    /// <summary>目标采样率（0 = 保持源采样率）。</summary>
+    public static IReadOnlyList<NamedOption<int>> SampleRates { get; } =
+    [
+        new NamedOption<int> { Value = 0, Name = "保持源采样率" },
+        new NamedOption<int> { Value = 8000, Name = "8000 Hz" },
+        new NamedOption<int> { Value = 16000, Name = "16000 Hz" },
+        new NamedOption<int> { Value = 22050, Name = "22050 Hz" },
+        new NamedOption<int> { Value = 32000, Name = "32000 Hz" },
+        new NamedOption<int> { Value = 44100, Name = "44100 Hz" },
+        new NamedOption<int> { Value = 48000, Name = "48000 Hz" },
+        new NamedOption<int> { Value = 96000, Name = "96000 Hz" },
+        new NamedOption<int> { Value = 192000, Name = "192000 Hz" },
     ];
 
     /// <summary>字幕对齐方式（ASS 小键盘编号）。</summary>

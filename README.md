@@ -21,7 +21,9 @@ MediaCraft 是一个 Windows 桌面端 FFmpeg 图形前端：把文件或文件�
 - 参数双模式：**简单模式**一个质量滑块（实时显示映射结果，如「滑块 75 → `-cq 23 -preset p5``」），
   **高级模式**直给原生参数（码率控制、CRF/CQ、preset/tune/profile/level/GOP/像素格式、附加参数）
 - 分辨率四种模式（保持 / 指定宽 / 指定高 / 框内只缩不放）、帧率、硬解方式可选
-- 音轨逐条处理：直通 / 重编码（aac、opus、mp3、ac3、flac、vorbis、alac、PCM）+ 码率；
+- 音轨逐条处理：直通 / 重编码（AAC、OPUS、MP3、AC3、FLAC、Vorbis、ALAC、PCM 16/24/32bit）
+  + 码率、声道、采样率；**码率控件会随编码器变形态**——有损自由填、AC3 只给合法档位（实测非法值会被
+  ffmpeg 静默取整）、无损不显示码率框而是直接算出实际码率（如「24bit · 2ch · 44100 Hz → 2116 kbps」）；
   字幕轨：内封保留 / **烧入画面**（字体、字号、颜色、描边、位置）/ 提取为 srt·ass·vtt / 丢弃
 - 外挂字幕文件可直接烧入；字幕文件本身（.srt/.ass/.vtt）可作为输入做格式转换
 - 输出：命名模板（`{name}_{encoder}_{quality}` 等占位符）、输出目录、防覆盖自动加序号、`+faststart`
@@ -99,7 +101,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-fd.ps1
 ## 5. 自检
 
 ```powershell
-# 完整自检：真跑 36 项（容器兼容性矩阵 117 个组合、11 个编码器、硬解、缩放、烧字幕、提取、预检、预设逻辑…）
+# 完整自检：真跑 39 项（容器兼容性矩阵 126 个组合、11 个编码器、硬解、缩放、烧字幕、提取、预检、预设逻辑…）
 .\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest all "$env:TEMP\report.txt"
 
 # 快速自检：只做定位 → 能力探测 → 编码器功能探测 → 生成测试素材（约 15 秒）

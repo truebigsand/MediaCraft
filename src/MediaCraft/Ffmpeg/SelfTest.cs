@@ -38,6 +38,24 @@ public static class SelfTest
         /// <summary>预期输出里有音频流。</summary>
         public bool? ExpectAudio { get; init; }
 
+        /// <summary>预期音频编码（ffprobe 的 codec_name）。</summary>
+        public string? ExpectAudioCodec { get; init; }
+
+        /// <summary>预期音频采样率（Hz）。</summary>
+        public int? ExpectAudioSampleRate { get; init; }
+
+        /// <summary>预期音频声道数。</summary>
+        public int? ExpectAudioChannels { get; init; }
+
+        /// <summary>主步骤命令行里必须出现的参数片段。</summary>
+        public string[] RequireArguments { get; init; } = [];
+
+        /// <summary>主步骤命令行里必须**不**出现的参数片段。</summary>
+        public string[] ForbidArguments { get; init; } = [];
+
+        /// <summary>预期预检修正后的音频码率（校验修正结果，而不是产出文件的平均码率）。</summary>
+        public int? ExpectEffectiveAudioBitrateKbps { get; init; }
+
         public string? ContainerExtension { get; init; }
     }
 
@@ -834,6 +852,63 @@ public static class SelfTest
         syncCase.Passed = syncCase.Failures.Count == 0;
         results.Add(syncCase);
 
+        // ── 7. 音频编码器元数据（无损标记 / 固定档位 / PCM 码率公式）──
+        var audioCase = new CaseResult { Name = "音频 · 编码器元数据与 PCM 码率公式" };
+
+        foreach (var id in new[] { "flac", "alac", "pcm_s16le", "pcm_s24le", "pcm_s32le" })
+        {
+            if (!EncoderCatalog.GetAudioCodec(id).IsLossless)
+            {
+                audioCase.Failures.Add($"{id} 应标记为无损（实测 -b:a 对它无效）");
+            }
+        }
+
+        foreach (var id in new[] { "aac", "libopus", "libmp3lame", "ac3", "libvorbis" })
+        {
+            if (EncoderCatalog.GetAudioCodec(id).IsLossless)
+            {
+                audioCase.Failures.Add($"{id} 不应标记为无损");
+            }
+        }
+
+        var ac3 = EncoderCatalog.GetAudioCodec("ac3");
+        if (ac3.BitrateOptions.Length == 0)
+        {
+            audioCase.Failures.Add("AC3 应有固定码率档位");
+        }
+        else
+        {
+            audioCase.Details.Add(
+                $"AC3 固定档位 {ac3.BitrateOptions.Length} 个（{ac3.BitrateOptions[0]}-{ac3.BitrateOptions[^1]} kbps）");
+            if (EncoderCatalog.NearestBitrate(ac3.BitrateOptions, 200) != 192)
+            {
+                audioCase.Failures.Add("200k 应取整到 192k（实测 ffmpeg 的行为）");
+            }
+
+            if (EncoderCatalog.NearestBitrate(ac3.BitrateOptions, 1000) != 640)
+            {
+                audioCase.Failures.Add("1000k 应取整到 640k（实测 ffmpeg 的行为）");
+            }
+        }
+
+        // 无损 PCM 码率公式：采样率 × 位深 × 声道（实测 2116 / 6350 kbps 精确吻合）
+        var pcmStereo = EncoderCatalog.ComputePcmBitrate(44100, 24, 2);
+        var pcmSurround = EncoderCatalog.ComputePcmBitrate(44100, 24, 6);
+        audioCase.Details.Add($"PCM 24bit 44.1kHz 立体声 → {pcmStereo} kbps（实测 ffprobe 报 2116）");
+        audioCase.Details.Add($"PCM 24bit 44.1kHz 5.1 → {pcmSurround} kbps（实测 ffprobe 报 6350）");
+        if (pcmStereo != 2116)
+        {
+            audioCase.Failures.Add($"PCM 立体声码率公式不符：得到 {pcmStereo}，应为 2116");
+        }
+
+        if (pcmSurround != 6350)
+        {
+            audioCase.Failures.Add($"PCM 5.1 码率公式不符：得到 {pcmSurround}，应为 6350");
+        }
+
+        audioCase.Passed = audioCase.Failures.Count == 0;
+        results.Add(audioCase);
+
         return results;
     }
 
@@ -1004,7 +1079,57 @@ public static class SelfTest
             }),
             new Expectation { CodecName = "h264", Width = 1280, Height = 720, ExpectAudio = true, ContainerExtension = "mkv" });
 
-        // ── 提取音频 ──
+        // ── 无损 PCM：不传码率（ffmpeg 会静默忽略），采样率/声道覆盖生效 ──
+        Add(
+            "音频 · PCM 24bit（不传码率，采样率 48k、声道立体声）",
+            Base(p =>
+            {
+                p.EncoderId = "h264_nvenc";
+                foreach (var track in p.AudioTracks)
+                {
+                    track.Action = AudioActionKind.Encode;
+                    track.CodecId = "pcm_s24le";
+                    track.BitRateKbps = 192;   // 故意留着：验证它不会出现在命令行里
+                    track.SampleRate = 48000;
+                    track.TargetChannels = 2;
+                }
+            }),
+            new Expectation
+            {
+                CodecName = "h264",
+                ExpectAudio = true,
+                ExpectAudioCodec = "pcm_s24le",
+                ExpectAudioSampleRate = 48000,
+                ExpectAudioChannels = 2,
+                ContainerExtension = "mp4",
+                RequireArguments = ["-ar:a:0", "48000", "-ac:a:0", "2"],
+                ForbidArguments = ["-b:a:0"],
+            });
+
+        // ── 固定档位：非法码率由预检取整（实测 AC3 填 200k 会静默变成 192k）──
+        Add(
+            "音频 · AC3 非法码率（预检应取整到 192k）",
+            Base(p =>
+            {
+                p.EncoderId = "h264_nvenc";
+                p.Container = "mkv";
+                foreach (var track in p.AudioTracks)
+                {
+                    track.Action = AudioActionKind.Encode;
+                    track.CodecId = "ac3";
+                    track.BitRateKbps = 200;
+                }
+            }),
+            new Expectation
+            {
+                CodecName = "h264",
+                ExpectAudio = true,
+                ExpectAudioCodec = "ac3",
+                ContainerExtension = "mkv",
+                ExpectEffectiveAudioBitrateKbps = 192,
+            });
+
+        // ── 纯音频提取 ──
         Add(
             "提取音频 · 丢弃视频 → m4a",
             Base(p =>
@@ -1102,6 +1227,16 @@ public static class SelfTest
         foreach (var issue in preflight.Issues)
         {
             result.Details.Add($"[预检·{issue.SeverityText}] {issue.DisplayText}");
+        }
+
+        if (expectation.ExpectEffectiveAudioBitrateKbps is not null)
+        {
+            var effectiveTrack = preflight.Effective.AudioTracks.FirstOrDefault();
+            if (effectiveTrack?.BitRateKbps != expectation.ExpectEffectiveAudioBitrateKbps)
+            {
+                result.Failures.Add(
+                    $"预检后音频码率不符：期望 {expectation.ExpectEffectiveAudioBitrateKbps}，实际 {effectiveTrack?.BitRateKbps}");
+            }
         }
 
         if (expectation.ExpectPreflightBlocked)
@@ -1236,6 +1371,40 @@ public static class SelfTest
         if (expectation.ExpectAudio is true && produced.AudioStreams.Count == 0)
         {
             result.Failures.Add("产出里没有音频流");
+        }
+
+        var producedAudio = produced.AudioStreams.FirstOrDefault();
+        if (expectation.ExpectAudioCodec is not null &&
+            !string.Equals(producedAudio?.CodecName, expectation.ExpectAudioCodec, StringComparison.OrdinalIgnoreCase))
+        {
+            result.Failures.Add($"音频编码不符：期望 {expectation.ExpectAudioCodec}，实际 {producedAudio?.CodecName ?? "无"}");
+        }
+
+        if (expectation.ExpectAudioSampleRate is not null && producedAudio?.SampleRate != expectation.ExpectAudioSampleRate)
+        {
+            result.Failures.Add($"音频采样率不符：期望 {expectation.ExpectAudioSampleRate}，实际 {producedAudio?.SampleRate}");
+        }
+
+        if (expectation.ExpectAudioChannels is not null && producedAudio?.Channels != expectation.ExpectAudioChannels)
+        {
+            result.Failures.Add($"音频声道数不符：期望 {expectation.ExpectAudioChannels}，实际 {producedAudio?.Channels}");
+        }
+
+        // 命令行层面的断言：有些行为（例如无损编码不传 -b:a）只能从参数看出来
+        foreach (var required in expectation.RequireArguments)
+        {
+            if (!mainStep.Arguments.Contains(required))
+            {
+                result.Failures.Add($"命令行缺少必需参数：{required}");
+            }
+        }
+
+        foreach (var forbidden in expectation.ForbidArguments)
+        {
+            if (mainStep.Arguments.Contains(forbidden))
+            {
+                result.Failures.Add($"命令行不应出现参数：{forbidden}");
+            }
         }
 
         if (expectation.ContainerExtension is not null &&

@@ -70,6 +70,19 @@ public enum ScaleMode
     Fit,
 }
 
+/// <summary>音轨码率控件的形态（由所选编码器决定）。</summary>
+public enum AudioBitrateMode
+{
+    /// <summary>有损、自由填（AAC/OPUS/MP3/Vorbis）。</summary>
+    Free = 0,
+
+    /// <summary>有损、固定档位（AC3）。</summary>
+    Fixed,
+
+    /// <summary>无损：码率不由用户决定，界面改成显示实际码率/说明。</summary>
+    NotApplicable,
+}
+
 /// <summary>音频轨处理方式。</summary>
 public enum AudioActionKind
 {
@@ -118,6 +131,7 @@ public sealed partial class AudioTrackParams : ObservableObject
         SourceCodec = sourceCodec;
         Channels = channels;
         Language = language;
+        SourceChannels = channels;
     }
 
     public int StreamIndex { get; set; }
@@ -147,6 +161,35 @@ public sealed partial class AudioTrackParams : ObservableObject
     [ObservableProperty]
     private int _targetChannels;
 
+    /// <summary>目标采样率（Hz）；0 = 保持源采样率。</summary>
+    [ObservableProperty]
+    private int _sampleRate;
+
+    /// <summary>码率控件形态（界面用，由所选编码器推导）。</summary>
+    [ObservableProperty]
+    [property: JsonIgnore]
+    private AudioBitrateMode _bitrateMode = AudioBitrateMode.Free;
+
+    /// <summary>固定档位（AC3）；其余编码器为空。</summary>
+    [ObservableProperty]
+    [property: JsonIgnore]
+    private IReadOnlyList<int> _bitrateOptions = [];
+
+    /// <summary>无损编码器的实际码率/说明（界面用）。</summary>
+    [ObservableProperty]
+    [property: JsonIgnore]
+    private string _bitrateNote = string.Empty;
+
+    /// <summary>源采样率（Hz），仅用于界面提示与无损码率换算。</summary>
+    [ObservableProperty]
+    [property: JsonIgnore]
+    private int _sourceSampleRate;
+
+    /// <summary>源声道数，仅用于界面提示与无损码率换算。</summary>
+    [ObservableProperty]
+    [property: JsonIgnore]
+    private int _sourceChannels;
+
     /// <summary>
     /// 预检自动调整过这条轨时的原因说明（界面显示用，不进持久化）。
     /// 存在的意义：预检的自动修正会写回参数，用户必须能看见「为什么变了」。
@@ -167,6 +210,7 @@ public sealed partial class AudioTrackParams : ObservableObject
         CodecId = CodecId,
         BitRateKbps = BitRateKbps,
         TargetChannels = TargetChannels,
+        SampleRate = SampleRate,
     };
 }
 
@@ -533,6 +577,7 @@ public sealed partial class TranscodeParams : ObservableObject
             target.CodecId = origin.CodecId;
             target.BitRateKbps = origin.BitRateKbps;
             target.TargetChannels = origin.TargetChannels;
+            target.SampleRate = origin.SampleRate;
         }
 
         for (var index = 0; index < Math.Min(SubtitleTracks.Count, source.SubtitleTracks.Count); index++)
@@ -577,7 +622,10 @@ public sealed partial class TranscodeParams : ObservableObject
                     stream.DisplayName,
                     stream.CodecName,
                     stream.Channels,
-                    stream.Language));
+                    stream.Language)
+                {
+                    SourceSampleRate = stream.SampleRate,
+                });
             }
         }
 
