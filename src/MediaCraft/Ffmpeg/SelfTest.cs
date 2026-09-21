@@ -576,6 +576,74 @@ public static class SelfTest
         cloneCase.Passed = cloneCase.Failures.Count == 0;
         results.Add(cloneCase);
 
+        // ── 6. 标量同步与轨道动作搬运（「改参数同步到全部文件」与「应用到全部」的底层逻辑）──
+        // 这条锁的是一个真踩过的 bug：按目标文件重建轨道列表时，把当前文件调好的轨道动作
+        // （例如「烧入字幕」）打回了默认「直通」。
+        var syncCase = new CaseResult { Name = "参数 · 标量同步与轨道动作搬运" };
+
+        var syncSource = new TranscodeParams { EncoderId = "hevc_nvenc", QualitySlider = 40, Container = "mkv" };
+        syncSource.AudioTracks.Add(new AudioTrackParams(1, "源音轨1", "aac", 2, string.Empty)
+        {
+            Action = AudioActionKind.Encode,
+            CodecId = "libopus",
+            BitRateKbps = 96,
+        });
+        syncSource.SubtitleTracks.Add(new SubtitleTrackParams(2, "源字幕1", "subrip", false)
+        {
+            Action = SubtitleActionKind.Burn,
+        });
+
+        var syncTarget = new TranscodeParams { EncoderId = "libx264", QualitySlider = 90, Container = "mp4" };
+        syncTarget.AudioTracks.Add(new AudioTrackParams(5, "目标音轨1", "ac3", 6, string.Empty));
+        syncTarget.AudioTracks.Add(new AudioTrackParams(6, "目标音轨2", "aac", 2, string.Empty));
+        syncTarget.SubtitleTracks.Add(new SubtitleTrackParams(9, "目标字幕1", "subrip", false));
+
+        syncTarget.CopyScalarsFrom(syncSource);
+        syncCase.Details.Add($"标量同步后：{syncTarget.EncoderId} / 质量 {syncTarget.QualitySlider} / 容器 {syncTarget.Container}");
+        syncCase.Details.Add($"轨道数量与索引保持不变：音轨 {string.Join(",", syncTarget.AudioTracks.Select(t => t.StreamIndex))}、字幕 {string.Join(",", syncTarget.SubtitleTracks.Select(t => t.StreamIndex))}");
+
+        if (syncTarget.EncoderId != "hevc_nvenc" || syncTarget.QualitySlider != 40 || syncTarget.Container != "mkv")
+        {
+            syncCase.Failures.Add("CopyScalarsFrom 没有正确覆盖标量参数");
+        }
+
+        if (syncTarget.AudioTracks.Count != 2 || syncTarget.AudioTracks[0].StreamIndex != 5 ||
+            syncTarget.AudioTracks[0].Action != AudioActionKind.Copy ||
+            syncTarget.SubtitleTracks[0].Action != SubtitleActionKind.Copy)
+        {
+            syncCase.Failures.Add("CopyScalarsFrom 不应改动目标的轨道列表与动作");
+        }
+
+        syncTarget.ApplyTracksFrom(syncSource);
+        syncCase.Details.Add(
+            $"搬运轨道动作后：音轨1→{syncTarget.AudioTracks[0].Action}（{syncTarget.AudioTracks[0].CodecId} {syncTarget.AudioTracks[0].BitRateKbps}k）、" +
+            $"音轨2→{syncTarget.AudioTracks[1].Action}、字幕1→{syncTarget.SubtitleTracks[0].Action}");
+
+        if (syncTarget.AudioTracks[0].Action != AudioActionKind.Encode ||
+            syncTarget.AudioTracks[0].CodecId != "libopus" ||
+            syncTarget.AudioTracks[0].BitRateKbps != 96)
+        {
+            syncCase.Failures.Add("ApplyTracksFrom 没有按位置搬来音轨动作");
+        }
+
+        if (syncTarget.AudioTracks[1].Action != AudioActionKind.Copy)
+        {
+            syncCase.Failures.Add("目标多出来的音轨应保持原样");
+        }
+
+        if (syncTarget.SubtitleTracks[0].Action != SubtitleActionKind.Burn)
+        {
+            syncCase.Failures.Add("ApplyTracksFrom 没有搬来字幕动作（「烧入字幕」被覆盖过一次，这里必须锁住）");
+        }
+
+        if (syncTarget.AudioTracks.Select(t => t.StreamIndex).ToArray() is not [5, 6])
+        {
+            syncCase.Failures.Add("ApplyTracksFrom 不应改动目标的流索引");
+        }
+
+        syncCase.Passed = syncCase.Failures.Count == 0;
+        results.Add(syncCase);
+
         return results;
     }
 

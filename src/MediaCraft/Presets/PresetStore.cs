@@ -173,47 +173,8 @@ public sealed class PresetStore
     /// </summary>
     public static void ApplyTo(Preset preset, TranscodeParams target)
     {
-        var source = preset.Parameters;
-
-        // ── 标量参数 ──
-        target.EncoderId = source.EncoderId;
-        target.QualityMode = source.QualityMode;
-        target.VideoMode = source.VideoMode;
-        target.QualitySlider = source.QualitySlider;
-        target.RateControl = source.RateControl;
-        target.QualityValue = source.QualityValue;
-        target.BitrateKbps = source.BitrateKbps;
-        target.MaxrateKbps = source.MaxrateKbps;
-        target.BufsizeKbps = source.BufsizeKbps;
-        target.Preset = source.Preset;
-        target.Tune = source.Tune;
-        target.Profile = source.Profile;
-        target.Level = source.Level;
-        target.Gop = source.Gop;
-        target.PixelFormat = source.PixelFormat;
-        target.HwAccel = source.HwAccel;
-        target.ScaleMode = source.ScaleMode;
-        target.ScaleWidth = source.ScaleWidth;
-        target.ScaleHeight = source.ScaleHeight;
-        target.FrameRate = source.FrameRate;
-        target.Container = source.Container;
-        target.NamingTemplate = source.NamingTemplate;
-        target.AllowOverwrite = source.AllowOverwrite;
-        target.FastStart = source.FastStart;
-        target.ExtraArguments = source.ExtraArguments;
-
-        // 字幕样式
-        target.SubtitleStyle.FontName = source.SubtitleStyle.FontName;
-        target.SubtitleStyle.FontSize = source.SubtitleStyle.FontSize;
-        target.SubtitleStyle.PrimaryColor = source.SubtitleStyle.PrimaryColor;
-        target.SubtitleStyle.OutlineColor = source.SubtitleStyle.OutlineColor;
-        target.SubtitleStyle.OutlineWidth = source.SubtitleStyle.OutlineWidth;
-        target.SubtitleStyle.Shadow = source.SubtitleStyle.Shadow;
-        target.SubtitleStyle.MarginVertical = source.SubtitleStyle.MarginVertical;
-        target.SubtitleStyle.Alignment = source.SubtitleStyle.Alignment;
-        target.SubtitleStyle.Bold = source.SubtitleStyle.Bold;
-
-        // 输出目录不跟着预设走（每台机器/每个批次差异太大，预设里留空表示沿用当前设置）
+        // ── 标量参数（含字幕样式）──
+        target.CopyScalarsFrom(preset.Parameters);
 
         // ── 轨道意图 ──
         var intent = preset.Intent;

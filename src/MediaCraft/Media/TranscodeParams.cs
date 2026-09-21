@@ -455,6 +455,83 @@ public sealed partial class TranscodeParams : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 只复制标量参数与字幕样式，**不动轨道列表**。
+    ///
+    /// 用途：①「改参数时同步到列表里所有文件」；② 预设套用。
+    /// 轨道选择是按流索引走的，索引因文件而异，必须留在各文件自己的轨道对象上，
+    /// 所以这里刻意不碰 AudioTracks / SubtitleTracks。
+    /// </summary>
+    public void CopyScalarsFrom(TranscodeParams source)
+    {
+        EncoderId = source.EncoderId;
+        QualityMode = source.QualityMode;
+        VideoMode = source.VideoMode;
+        QualitySlider = source.QualitySlider;
+        RateControl = source.RateControl;
+        QualityValue = source.QualityValue;
+        BitrateKbps = source.BitrateKbps;
+        MaxrateKbps = source.MaxrateKbps;
+        BufsizeKbps = source.BufsizeKbps;
+        Preset = source.Preset;
+        Tune = source.Tune;
+        Profile = source.Profile;
+        Level = source.Level;
+        Gop = source.Gop;
+        PixelFormat = source.PixelFormat;
+        HwAccel = source.HwAccel;
+        ScaleMode = source.ScaleMode;
+        ScaleWidth = source.ScaleWidth;
+        ScaleHeight = source.ScaleHeight;
+        FrameRate = source.FrameRate;
+        Container = source.Container;
+        NamingTemplate = source.NamingTemplate;
+        AllowOverwrite = source.AllowOverwrite;
+        FastStart = source.FastStart;
+        ExtraArguments = source.ExtraArguments;
+        ExternalSubtitlePath = source.ExternalSubtitlePath;
+
+        SubtitleStyle.FontName = source.SubtitleStyle.FontName;
+        SubtitleStyle.FontSize = source.SubtitleStyle.FontSize;
+        SubtitleStyle.PrimaryColor = source.SubtitleStyle.PrimaryColor;
+        SubtitleStyle.OutlineColor = source.SubtitleStyle.OutlineColor;
+        SubtitleStyle.OutlineWidth = source.SubtitleStyle.OutlineWidth;
+        SubtitleStyle.Shadow = source.SubtitleStyle.Shadow;
+        SubtitleStyle.MarginVertical = source.SubtitleStyle.MarginVertical;
+        SubtitleStyle.Alignment = source.SubtitleStyle.Alignment;
+        SubtitleStyle.Bold = source.SubtitleStyle.Bold;
+
+        // OutputDirectory 不跟着同步：不同批次/不同素材的目标目录差异太大，属于「每个文件自己定」的东西
+    }
+
+    /// <summary>
+    /// 按**位置**把轨道动作复制过来（第一个音轨 → 第一个音轨，依此类推）。
+    /// 只覆盖两边都存在的轨道；目标多出来的轨道保持原样。
+    /// 「应用到全部文件」用它——否则重建轨道列表会把当前文件调好的动作打回默认值。
+    /// </summary>
+    public void ApplyTracksFrom(TranscodeParams source)
+    {
+        for (var index = 0; index < Math.Min(AudioTracks.Count, source.AudioTracks.Count); index++)
+        {
+            var target = AudioTracks[index];
+            var origin = source.AudioTracks[index];
+            target.IsSelected = origin.IsSelected;
+            target.Action = origin.Action;
+            target.CodecId = origin.CodecId;
+            target.BitRateKbps = origin.BitRateKbps;
+            target.TargetChannels = origin.TargetChannels;
+        }
+
+        for (var index = 0; index < Math.Min(SubtitleTracks.Count, source.SubtitleTracks.Count); index++)
+        {
+            var target = SubtitleTracks[index];
+            var origin = source.SubtitleTracks[index];
+            target.IsSelected = origin.IsSelected;
+            target.Action = origin.Action;
+            target.ExtractFormat = origin.ExtractFormat;
+        }
+    }
+
     /// <summary>新文件是否应跟随当前参数（模板模式）。</summary>
     [JsonIgnore]
     public bool IsTemplate => false;

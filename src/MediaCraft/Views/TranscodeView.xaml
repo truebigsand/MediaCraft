@@ -111,6 +111,24 @@
         <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
             <StackPanel>
 
+                <!-- ── 参数作用域（防止「改了参数却没落到文件上」的误解）── -->
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Text="参数作用域" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Text="{Binding ScopeText}" Style="{StaticResource HintText}" TextWrapping="Wrap" />
+
+                        <CheckBox Content="改参数时同步到列表里所有文件（轨道选择仍各自独立）"
+                                  IsChecked="{Binding SyncToAllFiles, Mode=TwoWay}"
+                                  Margin="0,6,0,0" />
+
+                        <Button Content="把当前参数应用到全部文件"
+                                Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ApplyToAllCommand}"
+                                HorizontalAlignment="Left"
+                                Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+
                 <!-- ── 预设 ── -->
                 <Border Style="{StaticResource CardBorder}">
                     <StackPanel>

@@ -44,6 +44,13 @@ public sealed partial class AppSettings : ObservableObject
     [ObservableProperty]
     private int _defaultConcurrency = 1;
 
+    /// <summary>
+    /// 改参数时是否同步到列表里所有文件。
+    /// 默认开启：批量转码的常态是「一批素材统一规格」，每文件独立参数的差异主要体现在轨道选择上。
+    /// </summary>
+    [ObservableProperty]
+    private bool _syncParamsToAllFiles = true;
+
     /// <summary>同名输出文件是否直接覆盖（默认关闭：自动加序号）。</summary>
     [ObservableProperty]
     private bool _allowOverwrite;

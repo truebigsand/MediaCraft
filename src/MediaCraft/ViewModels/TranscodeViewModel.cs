@@ -50,17 +50,20 @@ public sealed partial class TranscodeViewModel : ObservableObject
         {
             _revalidateTimer.Stop();
             Revalidate();
+            PropagateToAllIfNeeded();
         };
 
         Params = _templateParams;
         HookParams(_templateParams);
         UpdateEditTargetText();
+        SyncToAllFiles = settings.Current.SyncParamsToAllFiles;
 
         // 列表为空时的提示语要跟着集合变化刷新：
         // Files 是只读属性，集合增减不会自动触发绑定重算，这里手动通知。
         Files.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(Files));
+            OnPropertyChanged(nameof(ScopeText));
             FilesChanged?.Invoke();
         };
     }
@@ -109,6 +112,35 @@ public sealed partial class TranscodeViewModel : ObservableObject
     /// <summary>当前编码器的能力说明。</summary>
     [ObservableProperty]
     private string _encoderHint = string.Empty;
+
+    /// <summary>
+    /// 改参数时是否同步到列表里所有文件。
+    /// 默认开启：批量转码的常态是「一批素材统一规格」；关掉后才做纯粹的逐文件精调。
+    /// </summary>
+    [ObservableProperty]
+    private bool _syncToAllFiles = true;
+
+    /// <summary>当前参数到底作用在谁身上（界面上必须一眼可见，否则拖参数会以为没生效）。</summary>
+    public string ScopeText
+    {
+        get
+        {
+            if (Files.Count == 0)
+            {
+                return "列表为空：当前参数会作为新加入文件的默认值";
+            }
+
+            if (SelectedFile is null)
+            {
+                return $"当前编辑的是「新文件默认参数」，列表里已有 {Files.Count} 个文件不受影响——" +
+                       "选中一个文件或勾上同步开关才能改到它们。";
+            }
+
+            return SyncToAllFiles
+                ? $"当前参数作用于全部 {Files.Count} 个文件（轨道选择各自独立）"
+                : $"当前参数只作用于「{SelectedFile.FileName}」，其余 {Files.Count - 1} 个文件不受影响";
+        }
+    }
 
     // ── 下拉数据源 ──
 
@@ -235,6 +267,14 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
         StatusText = $"已添加 {added.Count} 个文件，正在分析…";
 
+        // 自动选中刚加入的第一个文件。
+        // 否则参数面板编辑的是「新文件默认参数」模板，用户拖质量滑块会看不到任何效果
+        //（参数没落到文件上），这是最容易踩的坑。
+        if (SelectedFile is null)
+        {
+            SelectedFile = added[0];
+        }
+
         await AnalyzeAsync(added).ConfigureAwait(true);
     }
 
@@ -335,22 +375,62 @@ public sealed partial class TranscodeViewModel : ObservableObject
                 continue;
             }
 
-            var clone = Params.Clone();
-            UnhookParams(file.Parameters);
-            file.Parameters = clone;
-            HookParams(clone);
+            // 标量参数直接覆盖
+            file.Parameters.CopyScalarsFrom(Params);
 
-            // 轨道选择按目标文件自己的流列表重建
+            // 轨道：先按目标文件自己的流列表重建（流索引因文件而异），
+            // 再按位置把当前文件的轨道动作搬过来——否则重建会把动作打回默认「直通」
             if (file.Info is not null)
             {
-                clone.InitializeTracksFrom(file.Info, resetExisting: true);
+                file.Parameters.InitializeTracksFrom(file.Info, resetExisting: true);
             }
+
+            file.Parameters.ApplyTracksFrom(Params);
 
             file.RefreshSummary();
             count++;
         }
 
         StatusText = count > 0 ? $"参数已应用到 {count} 个文件" : "没有需要应用的文件";
+        OnPropertyChanged(nameof(ScopeText));
+    }
+
+    /// <summary>
+    /// 同步开关打开时，把当前面板的标量参数铺到列表里所有文件。
+    /// 只复制标量（便宜，可以跟着拖动实时跑）；轨道选择保持各文件独立。
+    /// </summary>
+    private void PropagateToAllIfNeeded()
+    {
+        if (!SyncToAllFiles || Files.Count == 0)
+        {
+            return;
+        }
+
+        var changed = 0;
+        foreach (var file in Files)
+        {
+            if (ReferenceEquals(file.Parameters, Params))
+            {
+                continue;
+            }
+
+            file.Parameters.CopyScalarsFrom(Params);
+            file.RefreshSummary();
+            changed++;
+        }
+
+        if (changed > 0)
+        {
+            OnPropertyChanged(nameof(ScopeText));
+        }
+    }
+
+    partial void OnSyncToAllFilesChanged(bool value)
+    {
+        _settings.Current.SyncParamsToAllFiles = value;
+        _settings.ScheduleSave();
+        OnPropertyChanged(nameof(ScopeText));
+        PropagateToAllIfNeeded();
     }
 
     [RelayCommand]
@@ -498,7 +578,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
         OnPropertyChanged(nameof(AvailablePresets));
         OnPropertyChanged(nameof(AvailableTunes));
         OnPropertyChanged(nameof(AvailableProfiles));
-        RefreshQualityHintCommand.Execute(null);
+        UpdateQualityHint();
     }
 
     /// <summary>切换简单/高级模式（顺带同步两边的值，避免跳变）。</summary>
@@ -518,7 +598,10 @@ public sealed partial class TranscodeViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void RefreshQualityHint()
+    private void RefreshQualityHint() => UpdateQualityHint();
+
+    /// <summary>刷新质量提示与编码器说明（拖动滑块时必须实时更新，否则用户没有任何反馈）。</summary>
+    private void UpdateQualityHint()
     {
         var encoder = Params.Encoder;
         EncoderHint = Options.EncoderHint(encoder);
@@ -628,6 +711,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
             ? "新文件默认参数（添加文件时复制这套设置）"
             : $"正在编辑：{SelectedFile.FileName}";
         OnPropertyChanged(nameof(HasSelectedFile));
+        OnPropertyChanged(nameof(ScopeText));
     }
 
     /// <summary>
@@ -695,11 +779,9 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
     private void OnNestedPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (ReferenceEquals(Params, _templateParams) || SelectedFile is null)
-        {
-            // 编辑模板时也要刷新预览提示
-            RefreshQualityHintCommand.Execute(null);
-        }
+        // 任何参数变化都刷新提示：之前只在「编辑模板」分支里刷新，
+        // 导致选中文件拖滑块时提示文本不动，用户以为滑块没生效。
+        UpdateQualityHint();
 
         SelectedFile?.RefreshSummary();
         ScheduleRevalidate();
@@ -722,7 +804,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
                 OnPropertyChanged(nameof(AvailablePresets));
                 OnPropertyChanged(nameof(AvailableTunes));
                 OnPropertyChanged(nameof(AvailableProfiles));
-                RefreshQualityHintCommand.Execute(null);
+                UpdateQualityHint();
                 break;
         }
     }
