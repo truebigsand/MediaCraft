@@ -53,10 +53,10 @@ public static class SelfTest
         /// <summary>预期计划里的可见步骤数（用于验证两遍编码确实拆成了两步）。</summary>
         public int? ExpectStepCount { get; init; }
 
-        /// <summary>主步骤命令行里必须出现的参数片段。</summary>
+        /// <summary>主步骤命令行里必须出现的参数项（按数组元素精确匹配，不是子串）。</summary>
         public string[] RequireArguments { get; init; } = [];
 
-        /// <summary>主步骤命令行里必须**不**出现的参数片段。</summary>
+        /// <summary>主步骤命令行里必须**不**出现的参数项（按数组元素精确匹配）。</summary>
         public string[] ForbidArguments { get; init; } = [];
 
         /// <summary>预期预检修正后的音频码率（校验修正结果，而不是产出文件的平均码率）。</summary>
@@ -328,13 +328,15 @@ public static class SelfTest
                 opusAudioPath).ConfigureAwait(false);
             Write($"  sample-opus.mkv（视频 + opus 音轨）: {(opusOk.Ok ? "✓" : "✗ " + FirstLine(opusOk.Output))}");
 
-            // 4:2:2 10bit 源 + PCM 音轨：验证 av1_nvenc 的 4:2:0 转换与 PCM 在 mp4 里的直通
+            // 4:2:2 10bit 源 + PCM 音轨：验证只收 4:2:0 的硬编（av1_nvenc、QSV 家族）与 PCM 直通。
+            // 用 x265 而不是无损的 ffv1 编码：硬解只认主流编码，ffv1 会退化成软解就测不到硬解路径。
             var yuv422Ok = await FfmpegAsync(paths,
                 "-y", "-v", "error",
                 "-f", "lavfi", "-i", "testsrc2=s=320x180:r=10",
                 "-f", "lavfi", "-i", "sine=f=440",
                 "-t", "2",
-                "-c:v", "ffv1", "-pix_fmt", "yuv422p10le",
+                "-c:v", "libx265", "-preset", "ultrafast",
+                "-profile:v", "main422-10", "-pix_fmt", "yuv422p10le",
                 "-c:a", "pcm_s16le",
                 yuv422Path).ConfigureAwait(false);
             Write($"  sample-422-10bit.mkv（4:2:2 10bit 视频 + PCM 音轨）: {(yuv422Ok.Ok ? "✓" : "✗ " + FirstLine(yuv422Ok.Output))}");
@@ -503,6 +505,8 @@ public static class SelfTest
 
         var probes = new List<(string Label, bool Claimed, string[] Arguments)>();
 
+        // 探测是 4 路并发跑的，输出文件名必须逐条唯一：
+        // 同一个容器下多个编码器共用 v-{ext} 会互相覆盖，偶发 Permission denied（自检自身的竞态）
         foreach (var container in EncoderCatalog.Containers)
         {
             var muxer = MuxerName(container.Extension);
@@ -518,7 +522,7 @@ public static class SelfTest
                             "-y", "-v", "error",
                             "-f", "lavfi", "-i", "testsrc2=s=128x128:r=5", "-t", "0.2",
                             "-c:v", encoder,
-                            "-f", muxer, Path.Combine(probeDirectory, $"v-{container.Extension}"),
+                            "-f", muxer, Path.Combine(probeDirectory, $"v-{container.Extension}-{codec}"),
                         ]));
                 }
             }
@@ -532,7 +536,7 @@ public static class SelfTest
                         "-y", "-v", "error",
                         "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "0.2",
                         "-c:a", codec.Id,
-                        "-f", muxer, Path.Combine(probeDirectory, $"a-{container.Extension}"),
+                        "-f", muxer, Path.Combine(probeDirectory, $"a-{container.Extension}-{codec.Id}"),
                     ]));
             }
 
@@ -570,7 +574,7 @@ public static class SelfTest
                         "-y", "-v", "error",
                         "-i", subtitleFile,
                         "-c:s", codec.Encoder,
-                        "-f", muxer, Path.Combine(probeDirectory, $"s-{container.Extension}"),
+                        "-f", muxer, Path.Combine(probeDirectory, $"s-{container.Extension}-{codec.TableName}"),
                     ]));
             }
         }
@@ -1086,16 +1090,57 @@ public static class SelfTest
 
         foreach (var (encoderId, needsYuv420) in new[]
                  {
-                     ("av1_nvenc", true), ("hevc_nvenc", false), ("h264_nvenc", false),
-                     ("hevc_qsv", false), ("av1_qsv", false),
-                     ("libx264", false), ("libsvtav1", false),
+                     ("av1_nvenc", true),
+                     ("h264_qsv", true), ("hevc_qsv", true), ("av1_qsv", true), ("vp9_qsv", true),
+                     ("h264_nvenc", false), ("hevc_nvenc", false),
+                     ("libx264", false), ("libx265", false), ("libsvtav1", false),
                  })
         {
             var encoder = EncoderCatalog.Get(encoderId);
             if (encoder.NeedsYuv420Input != needsYuv420)
             {
                 yuv420Case.Failures.Add(
-                    $"{encoderId} 的 NeedsYuv420Input 应为 {needsYuv420}（实测除 av1_nvenc 外都能直接吃 4:2:2）");
+                    $"{encoderId} 的 NeedsYuv420Input 应为 {needsYuv420}（实测 QSV 家族与 av1_nvenc 都只收 4:2:0）");
+            }
+        }
+
+        // QSV 家族：软件路径用 format=nv12|p010le，帧留在显存时用 vpp_qsv 在显存内转；
+        // 目标格式按编码器能否吃 10bit 选（h264_qsv / vp9_qsv 只到 8bit）
+        foreach (var (encoderId, software, hardware) in new[]
+                 {
+                     ("h264_qsv", "format=nv12", "vpp_qsv=format=nv12"),
+                     ("vp9_qsv", "format=nv12", "vpp_qsv=format=nv12"),
+                     ("hevc_qsv", "format=p010le", "vpp_qsv=format=p010le"),
+                     ("av1_qsv", "format=p010le", "vpp_qsv=format=p010le"),
+                 })
+        {
+            var encoder = EncoderCatalog.Get(encoderId);
+            var source = new MediaStreamInfo { PixelFormat = "yuv422p10le" };
+
+            var gotSoftware = EncoderCatalog.BuildYuv420ConversionFilter(encoder, source, string.Empty);
+            if (gotSoftware != software)
+            {
+                yuv420Case.Failures.Add($"{encoderId} 的软件转换应为 {software}，实际 {gotSoftware ?? "null"}");
+            }
+
+            var gotHardware = EncoderCatalog.BuildYuv420ConversionFilter(
+                encoder,
+                source,
+                string.Empty,
+                useHardwareFilter: true);
+            if (gotHardware != hardware)
+            {
+                yuv420Case.Failures.Add($"{encoderId} 的硬解转换应为 {hardware}，实际 {gotHardware ?? "null"}");
+            }
+
+            // 8bit 4:2:2 源不该选 10bit 目标格式
+            var eightBit = EncoderCatalog.BuildYuv420ConversionFilter(
+                encoder,
+                new MediaStreamInfo { PixelFormat = "yuv422p" },
+                string.Empty);
+            if (eightBit is null || !eightBit.EndsWith("nv12", StringComparison.Ordinal))
+            {
+                yuv420Case.Failures.Add($"{encoderId} 对 8bit 源应转 nv12，实际 {eightBit ?? "null"}");
             }
         }
 
@@ -1339,37 +1384,45 @@ public static class SelfTest
                 });
         }
 
-        // ── av1_nvenc 的 4:2:0 输入约束（实测 4:2:2 / 4:4:4 源直接编码失败）──
-        if (context.Capabilities.IsEncoderAvailable("av1_nvenc"))
-        {
-            var yuv422Info = MediaProbe.ProbeAsync(context.Paths.Ffprobe, context.Yuv422Path)
-                .GetAwaiter().GetResult();
-            if (yuv422Info is not null)
-            {
-                var yuv422Params = new TranscodeParams { EncoderId = "av1_nvenc" };
-                yuv422Params.InitializeTracksFrom(yuv422Info, resetExisting: true);
-                foreach (var track in yuv422Params.AudioTracks)
-                {
-                    // PCM 音轨在 mp4 里可直通（实测），顺便锁住它不再被强行重编码
-                    track.Action = AudioActionKind.Copy;
-                }
+        // ── 只收 4:2:0 的硬编（av1_nvenc、QSV 家族）：4:2:2 / 4:4:4 源实测直接编码会失败 ──
+        var yuv422Info = MediaProbe.ProbeAsync(context.Paths.Ffprobe, context.Yuv422Path)
+            .GetAwaiter().GetResult();
 
-                cases.Add((
-                    "AV1 硬编 · 4:2:2 10bit 源（自动转 4:2:0，PCM 音轨直通）",
-                    context.Yuv422Path,
-                    yuv422Params,
-                    new Expectation
-                    {
-                        CodecName = "av1",
-                        PixelFormat = "yuv420p10le",
-                        Width = 320,
-                        Height = 180,
-                        ExpectAudio = true,
-                        ExpectAudioCodec = "pcm_s16le",
-                        ContainerExtension = "mp4",
-                        RequireArguments = ["format=yuv420p10le"],
-                    }));
+        TranscodeParams BaseFrom(MediaInfo info, string encoderId, HwAccelKind? accel = null)
+        {
+            var parameters = new TranscodeParams { EncoderId = encoderId };
+            if (accel.HasValue)
+            {
+                parameters.HwAccel = accel.Value;
             }
+
+            parameters.InitializeTracksFrom(info, resetExisting: true);
+            foreach (var track in parameters.AudioTracks)
+            {
+                // PCM 音轨在 mp4 里可直通（实测），顺便锁住它不再被强行重编码
+                track.Action = AudioActionKind.Copy;
+            }
+
+            return parameters;
+        }
+
+        if (yuv422Info is not null && context.Capabilities.IsEncoderAvailable("av1_nvenc"))
+        {
+            cases.Add((
+                "AV1 硬编 · 4:2:2 10bit 源（自动转 4:2:0，PCM 音轨直通）",
+                context.Yuv422Path,
+                BaseFrom(yuv422Info, "av1_nvenc"),
+                new Expectation
+                {
+                    CodecName = "av1",
+                    PixelFormat = "yuv420p10le",
+                    Width = 320,
+                    Height = 180,
+                    ExpectAudio = true,
+                    ExpectAudioCodec = "pcm_s16le",
+                    ContainerExtension = "mp4",
+                    RequireArguments = ["format=yuv420p10le"],
+                }));
 
             // 反向：4:2:0 源不该被插任何格式转换
             Add(
@@ -1380,6 +1433,78 @@ public static class SelfTest
                     CodecName = "av1",
                     ContainerExtension = "mp4",
                     ForbidArguments = ["format=yuv420"],
+                });
+        }
+
+        // QSV 家族：帧留在显存（硬解）时用 vpp_qsv 在显存内转换，产出与软件路径一致
+        // 注意 h264_qsv 的产出色彩范围标记随源而变（本机样本是 limited → yuv420p），
+        // 所以这里只断言色度采样与位深，不锁 yuvj420p。
+        foreach (var (encoderId, codec, pixelFormat, conversion) in new[]
+                 {
+                     ("h264_qsv", "h264", "yuv420p", "vpp_qsv=format=nv12"),
+                     ("hevc_qsv", "hevc", "yuv420p10le", "vpp_qsv=format=p010le"),
+                     ("av1_qsv", "av1", "yuv420p10le", "vpp_qsv=format=p010le"),
+                     ("vp9_qsv", "vp9", "yuv420p", "vpp_qsv=format=nv12"),
+                 })
+        {
+            if (yuv422Info is null || !context.Capabilities.IsEncoderAvailable(encoderId))
+            {
+                continue;
+            }
+
+            cases.Add((
+                $"QSV · {encoderId} 转 4:2:2 10bit 源（vpp_qsv 显存内转换）",
+                context.Yuv422Path,
+                BaseFrom(yuv422Info, encoderId),
+                new Expectation
+                {
+                    CodecName = codec,
+                    PixelFormat = pixelFormat,
+                    Width = 320,
+                    Height = 180,
+                    ExpectAudio = true,
+                    ExpectAudioCodec = "pcm_s16le",
+                    ContainerExtension = "mp4",
+                    RequireArguments = [conversion],
+                }));
+        }
+
+        // 软解路径：同样的源走软件 format 转换，不该出现 vpp_qsv
+        if (yuv422Info is not null && context.Capabilities.IsEncoderAvailable("h264_qsv"))
+        {
+            cases.Add((
+                "QSV · h264_qsv 软解路径（format 转换，不用 vpp_qsv）",
+                context.Yuv422Path,
+                BaseFrom(yuv422Info, "h264_qsv", HwAccelKind.None),
+                new Expectation
+                {
+                    CodecName = "h264",
+                    PixelFormat = "yuv420p",
+                    ContainerExtension = "mp4",
+                    RequireArguments = ["format=nv12"],
+                    ForbidArguments = ["vpp_qsv"],
+                }));
+        }
+
+        // QSV 硬解不能与软件滤镜共存（实测滤镜图协商时直接失败，cuda / d3d11va / dxva2 都能自动回读）
+        // 预检应把硬解降级为 CPU 解码，命令里不该再出现 -hwaccel qsv
+        if (context.Capabilities.IsEncoderAvailable("h264_qsv"))
+        {
+            Add(
+                "QSV · 硬解 + 软件缩放（应降级为 CPU 解码）",
+                Base(p =>
+                {
+                    p.EncoderId = "h264_qsv";
+                    p.ScaleMode = ScaleMode.Height;
+                    p.ScaleHeight = 360;
+                }),
+                new Expectation
+                {
+                    CodecName = "h264",
+                    Width = 640,
+                    Height = 360,
+                    ContainerExtension = "mp4",
+                    ForbidArguments = ["-hwaccel", "qsv"],
                 });
         }
 

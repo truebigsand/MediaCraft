@@ -248,6 +248,7 @@ public static class EncoderCatalog
         {
             Id = "h264_qsv", DisplayName = "H.264 / QSV（Intel 核显硬编）",
             Codec = "h264", Family = EncoderFamily.Qsv, PreferredAccel = HwAccelKind.Qsv,
+            NeedsYuv420Input = true,
             TwoPassKind = TwoPassKind.EncoderInternal,
             TwoPassArguments = ["-extbrc", "1"],
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
@@ -259,6 +260,7 @@ public static class EncoderCatalog
         {
             Id = "hevc_qsv", DisplayName = "H.265 / HEVC / QSV（Intel 核显硬编）",
             Codec = "hevc", Family = EncoderFamily.Qsv, PreferredAccel = HwAccelKind.Qsv,
+            NeedsYuv420Input = true,
             TwoPassKind = TwoPassKind.EncoderInternal,
             TwoPassArguments = ["-extbrc", "1"],
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
@@ -270,6 +272,7 @@ public static class EncoderCatalog
         {
             Id = "av1_qsv", DisplayName = "AV1 / QSV（Intel Arc 硬编）",
             Codec = "av1", Family = EncoderFamily.Qsv, PreferredAccel = HwAccelKind.Qsv,
+            NeedsYuv420Input = true,
             // 实测 -extbrc 被接受但产出字节与不传时完全相同（无效果），故不提供
             TwoPassKind = TwoPassKind.None,
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
@@ -281,6 +284,7 @@ public static class EncoderCatalog
         {
             Id = "vp9_qsv", DisplayName = "VP9 / QSV（Intel 核显硬编）",
             Codec = "vp9", Family = EncoderFamily.Qsv, PreferredAccel = HwAccelKind.Qsv,
+            NeedsYuv420Input = true,
             // 实测该编码器没有 look_ahead / extbrc 选项（传入会被标记为未使用）
             TwoPassKind = TwoPassKind.None,
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
@@ -688,9 +692,16 @@ public static class EncoderCatalog
         return !isHighBitDepth || encoder.SupportsTenBit;
     }
 
-    /// <summary>色度采样是否为 4:2:0（格式名含 420，或硬件侧的 4:2:0 格式）。</summary>
-    public static bool IsYuv420(string pixelFormat)
+    /// <summary>把像素格式名换成界面用词（提示文案里不出现 nv12 / p010le 这类术语）。</summary>
+    public static string DescribePixelFormat(string pixelFormat) => pixelFormat.Trim().ToLowerInvariant() switch
     {
+        "yuv420p" or "yuvj420p" or "nv12" => "4:2:0 8bit",
+        "yuv420p10le" or "p010le" => "4:2:0 10bit",
+        var other => other,
+    };
+
+    /// <summary>色度采样是否为 4:2:0（格式名含 420，或硬件侧的 4:2:0 格式）。</summary>
+    public static bool IsYuv420(string pixelFormat)    {
         var format = pixelFormat.Trim().ToLowerInvariant();
         if (format.Length == 0)
         {
@@ -724,39 +735,64 @@ public static class EncoderCatalog
     }
 
     /// <summary>
-    /// 编码器要求 4:2:0 输入（<see cref="EncoderDefinition.NeedsYuv420Input"/>）而源不满足时，
-    /// 返回需要插入滤镜链的格式转换；源本身就是可接受的 4:2:0 时返回 null。
-    ///
-    /// 目标格式跟着源位深走：8bit 源 → yuv420p，10bit 及以上 → yuv420p10le
-    ///（NVENC 的 AV1 输出只到 10bit，更高位深降到 10bit）。
-    /// 用户在高级参数里手填了像素格式时不插手：以用户指定的为准。
+    /// 源是否需要为「只收 4:2:0 的编码器」做一次格式转换。
+    /// 4:2:0（含 nv12 / p010）且位深不超过 10bit 时不需要；探测不到像素格式时不擅自转换。
     /// </summary>
-    public static string? BuildYuv420ConversionFilter(
+    public static bool NeedsYuv420Conversion(
         EncoderDefinition encoder,
         MediaStreamInfo? videoStream,
         string userPixelFormat)
     {
         if (!encoder.NeedsYuv420Input || videoStream is null)
         {
-            return null;
+            return false;
         }
 
+        // 用户在高级参数里手填了像素格式：以用户的为准，不插手
         if (!string.IsNullOrWhiteSpace(userPixelFormat))
         {
-            return null;
+            return false;
         }
 
         var source = videoStream.PixelFormat;
         if (string.IsNullOrWhiteSpace(source))
         {
             // 探测不到像素格式：不擅自插转换，交给 ffmpeg 自己判断
+            return false;
+        }
+
+        return !IsYuv420(source) || PixelFormatBitDepth(source) > 10;
+    }
+
+    /// <summary>
+    /// 为「只收 4:2:0 的编码器」构造格式转换滤镜；不需要转换时返回 null。
+    ///
+    /// 目标格式按编码器与源位深选：
+    /// - NVENC 用软件格式名：`format=yuv420p` / `format=yuv420p10le`
+    ///   （NVENC 的 AV1 输出只到 10bit，更高位深降到 10bit）
+    /// - QSV 家族用半平面格式：硬件路径 `vpp_qsv=format=nv12|p010le`（在显存内转换），
+    ///   软件路径 `format=nv12|p010le`。两条路的目标格式一致，产出也一致（实测见 docs/spec.md）
+    ///
+    /// <paramref name="useHardwareFilter"/> 只在帧留在 QSV 表面时可为 true：
+    /// 链上已经有软件滤镜（缩放 / 字幕）时必须走软件路径，否则滤镜图协商不上。
+    /// </summary>
+    public static string? BuildYuv420ConversionFilter(
+        EncoderDefinition encoder,
+        MediaStreamInfo? videoStream,
+        string userPixelFormat,
+        bool useHardwareFilter = false)
+    {
+        if (!NeedsYuv420Conversion(encoder, videoStream, userPixelFormat))
+        {
             return null;
         }
 
-        var bitDepth = PixelFormatBitDepth(source);
-        if (IsYuv420(source) && bitDepth <= 10)
+        var bitDepth = PixelFormatBitDepth(videoStream!.PixelFormat);
+
+        if (encoder.Family == EncoderFamily.Qsv)
         {
-            return null;
+            var format = bitDepth > 8 && encoder.SupportsTenBit ? "p010le" : "nv12";
+            return useHardwareFilter ? $"vpp_qsv=format={format}" : $"format={format}";
         }
 
         return bitDepth > 8 ? "format=yuv420p10le" : "format=yuv420p";

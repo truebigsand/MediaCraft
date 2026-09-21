@@ -93,10 +93,13 @@ public static class FilterBuilder
         var hasSoftwareFilter = false;
         var isGpuOnly = true;
 
-        // av1_nvenc 只接受 4:2:0 输入，非 4:2:0 源要在链尾转一次。
-        // 走滤镜而不是 -pix_fmt 输出选项，是为了让 HasSoftwareFilter 生效，
-        // 从而自动关掉 -hwaccel_output_format 的显存帧路径（显存帧做不了软件格式转换）。
-        var pixelFormatFilter = EncoderCatalog.BuildYuv420ConversionFilter(encoder, info.VideoStream, parameters.PixelFormat);
+        // 编码器只吃 4:2:0（av1_nvenc、QSV 家族）时，非 4:2:0 源要在链尾转一次。
+        // 具体滤镜留到链尾再定：QSV 在帧留在显存时用 vpp_qsv 在显存内转（零拷贝），
+        // 否则用软件 format —— 后者会关掉 -hwaccel_output_format 的显存帧路径。
+        var needsPixelFormatConversion = EncoderCatalog.NeedsYuv420Conversion(
+            encoder,
+            info.VideoStream,
+            parameters.PixelFormat);
 
         // ── 缩放 ──
         var scaleFilter = BuildScaleFilter(info, parameters, out var scaleNote);
@@ -111,7 +114,7 @@ public static class FilterBuilder
             useGpuScale = effectiveAccel == HwAccelKind.Cuda
                           && encoder.Family == EncoderFamily.Nvenc
                           && subtitlePath is null
-                          && pixelFormatFilter is null;
+                          && !needsPixelFormatConversion;
 
             if (useGpuScale)
             {
@@ -140,11 +143,25 @@ public static class FilterBuilder
         }
 
         // ── 像素格式（链尾，与 ffmpeg 的 -pix_fmt 输出选项语义一致）──
+        // vpp_qsv 是硬件滤镜，帧留在显存里完成转换，因此不关显存帧路径；
+        // 软件 format 必须把帧取回内存，于是关掉它（显存帧做不了软件格式转换）。
+        var pixelFormatFilter = needsPixelFormatConversion
+            ? EncoderCatalog.BuildYuv420ConversionFilter(
+                encoder,
+                info.VideoStream,
+                parameters.PixelFormat,
+                useHardwareFilter: effectiveAccel == HwAccelKind.Qsv && !hasSoftwareFilter)
+            : null;
+
         if (pixelFormatFilter is not null)
         {
             result.Add(pixelFormatFilter);
-            hasSoftwareFilter = true;
-            isGpuOnly = false;
+
+            if (!pixelFormatFilter.StartsWith("vpp_qsv", StringComparison.Ordinal))
+            {
+                hasSoftwareFilter = true;
+                isGpuOnly = false;
+            }
         }
 
         var chain = new FilterChainResult
@@ -166,8 +183,9 @@ public static class FilterBuilder
 
         if (pixelFormatFilter is not null)
         {
+            var target = pixelFormatFilter[(pixelFormatFilter.LastIndexOf('=') + 1)..];
             chain.Notes.Add(
-                $"{encoder.DisplayName} 需要 4:2:0 输入，源是 {info.VideoStream?.PixelFormat}，已插入格式转换（{pixelFormatFilter.Replace("format=", string.Empty, StringComparison.Ordinal)}）");
+                $"{encoder.DisplayName} 需要 4:2:0 输入，源是 {info.VideoStream?.PixelFormat}，已插入格式转换（{target}）");
         }
 
         return chain;

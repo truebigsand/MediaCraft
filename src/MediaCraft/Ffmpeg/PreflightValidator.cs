@@ -469,15 +469,18 @@ public static class PreflightValidator
                 });
             }
 
-            var yuv420Filter = EncoderCatalog.BuildYuv420ConversionFilter(encoder, info.VideoStream, effective.PixelFormat);
-            if (yuv420Filter is not null)
+            if (EncoderCatalog.NeedsYuv420Conversion(encoder, info.VideoStream, effective.PixelFormat))
             {
-                var target = yuv420Filter.Replace("format=", string.Empty, StringComparison.Ordinal);
+                var conversion = EncoderCatalog.BuildYuv420ConversionFilter(encoder, info.VideoStream, effective.PixelFormat);
+                var target = conversion is null
+                    ? "4:2:0"
+                    : EncoderCatalog.DescribePixelFormat(conversion[(conversion.LastIndexOf('=') + 1)..]);
+
                 issues.Add(new PreflightIssue
                 {
                     Severity = IssueSeverity.Info,
                     Title = "会自动转换成 4:2:0",
-                    Detail = $"{encoder.DisplayName} 只接受 4:2:0 输入，源是 {info.VideoStream?.PixelFormat}，已插入 {target} 转换（色度采样减半）",
+                    Detail = $"{encoder.DisplayName} 只接受 4:2:0 输入，源是 {info.VideoStream?.PixelFormat}，将转成 {target}（色度采样减半）",
                 });
             }
         }
@@ -654,6 +657,19 @@ public static class PreflightValidator
 
         if (hasSoftwareFilter)
         {
+            // QSV 的硬件帧下不来：实测 -hwaccel qsv 配软件滤镜（scale / subtitles）会在滤镜图
+            // 协商时直接失败，而 cuda / d3d11va / dxva2 都能自动回读。因此这里直接不硬解。
+            if (requested == HwAccelKind.Qsv)
+            {
+                issues.Add(new PreflightIssue
+                {
+                    Severity = IssueSeverity.Info,
+                    Title = "改用 CPU 解码",
+                    Detail = "QSV 的硬件帧无法参与软件滤镜（缩放 / 字幕），本机实测会直接报错，已改为 CPU 解码 + 硬件编码",
+                });
+                return HwAccelKind.None;
+            }
+
             issues.Add(new PreflightIssue
             {
                 Severity = IssueSeverity.Info,

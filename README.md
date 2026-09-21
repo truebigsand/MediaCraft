@@ -115,7 +115,7 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-fd.ps1
 ## 自检
 
 ```powershell
-# 完整自检：真跑 50 项，含 171 个容器×编码组合的兼容性矩阵
+# 完整自检：真跑 56 项，含 171 个容器×编码组合的兼容性矩阵
 .\src\MediaCraft\bin\Debug\net10.0-windows\MediaCraft.exe --selftest all "$env:TEMP\report.txt"
 
 # 快速自检：定位、能力探测、编码器功能探测、生成测试素材（约 15 秒）
