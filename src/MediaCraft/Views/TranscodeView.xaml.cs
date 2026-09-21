@@ -1,6 +1,10 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using MediaCraft.Logging;
 using MediaCraft.ViewModels;
 
 namespace MediaCraft.Views;
@@ -12,6 +16,9 @@ namespace MediaCraft.Views;
 /// </summary>
 public partial class TranscodeView : UserControl
 {
+    /// <summary>右键菜单的目标（右键落在哪一行）。</summary>
+    private MediaFileViewModel? _contextFile;
+
     public TranscodeView()
     {
         InitializeComponent();
@@ -110,6 +117,128 @@ public partial class TranscodeView : UserControl
     }
 
     private void OnEnqueueAllClick(object sender, RoutedEventArgs e) => ViewModel?.EnqueueFiles(null);
+
+    // ── 右键菜单 ──
+
+    /// <summary>右键落在哪一行就记下来，并把该行选中（符合直觉）；菜单条目作用于它。</summary>
+    private void OnFileListRightClick(object sender, MouseButtonEventArgs e)
+    {
+        var item = FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject);
+        if (item?.DataContext is MediaFileViewModel file)
+        {
+            _contextFile = file;
+            if (!item.IsSelected)
+            {
+                item.IsSelected = true;
+            }
+        }
+        else
+        {
+            _contextFile = null;
+        }
+    }
+
+    /// <summary>菜单/按钮共用的目标：优先右键那一行，其次当前选中行。</summary>
+    private MediaFileViewModel? ContextFile => _contextFile ?? ViewModel?.SelectedFile;
+
+    private async void OnEnqueueContextFileClick(object sender, RoutedEventArgs e)
+    {
+        var viewModel = ViewModel;
+        var file = ContextFile;
+        if (viewModel is null || file is null)
+        {
+            return;
+        }
+
+        viewModel.EnqueueFiles([file]);
+        await Task.CompletedTask.ConfigureAwait(true);
+    }
+
+    private void OnCopyFilePathClick(object sender, RoutedEventArgs e) => CopyToClipboard(ContextFile?.Path);
+
+    private void OnRevealFileClick(object sender, RoutedEventArgs e)
+    {
+        var path = ContextFile?.Path;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = false });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(ex, "在资源管理器中显示文件");
+        }
+    }
+
+    private void OnOpenFileClick(object sender, RoutedEventArgs e)
+    {
+        var path = ContextFile?.Path;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(ex, "用默认程序打开文件");
+        }
+    }
+
+    private void OnRemoveContextFileClick(object sender, RoutedEventArgs e)
+    {
+        var viewModel = ViewModel;
+        var file = ContextFile;
+        if (viewModel is null || file is null)
+        {
+            return;
+        }
+
+        viewModel.RemoveSelectedCommand.Execute(file);
+        _contextFile = null;
+    }
+
+    private void OnClearFilesClick(object sender, RoutedEventArgs e) => ViewModel?.ClearFilesCommand.Execute(null);
+
+    private void CopyToClipboard(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(text);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(ex, "复制到剪贴板");
+        }
+    }
+
+    /// <summary>向上找指定类型的可视祖先。</summary>
+    private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
+    {
+        while (node is not null)
+        {
+            if (node is T match)
+            {
+                return match;
+            }
+
+            node = VisualTreeHelper.GetParent(node);
+        }
+
+        return null;
+    }
 
     private void OnDragOver(object sender, DragEventArgs e)
     {

@@ -158,6 +158,29 @@ mov_text → mkv               ❌  「Subtitle codec mov_text is not supported�
 注意两套命名：表里用 ffprobe 的 `codec_name`（运行时拿 `track.SourceCodec` 比对），
 探测时要用 ffmpeg 的**编码器**名——同一个东西两种叫法（`srt` = `subrip`）曾经让自检报了一次假警报。
 
+### 2.12 容器对**多条音轨**的支持（实测）
+
+| 容器 | 多条音轨 | 实测 |
+|---|---|---|
+| mp4 / mkv / mov / webm / **m4a** / opus(ogg) | ✅ | 3 条音轨全部写出并保留 |
+| **mp3** | ❌ | `Exactly one MP3 audio stream is required.` |
+| **flac** | ❌ | `Exactly one FLAC audio stream is required.` |
+| **wav** | ❌ | `wav muxer does not support more than one stream of type audio` |
+
+这不是理论问题：本机日志里就有一条真实失败 —— 用 3 条音轨的 BLU-RAY rip 输出 WAV，
+**0.1 秒就失败**（`Conversion failed!`，muxer 直接拒写），只保留一条后 11 秒成功。
+所以预检补了一条规则拦下这种组合：
+
+- 触发条件：容器 `MaxAudioStreams = 1`（mp3/flac/wav）且保留的音轨多于 1 条
+- 处理：**错误、只拦不修** —— 自动丢掉用户勾选的音轨属于静默数据丢失，必须由人决定保留哪一条
+- 提示文案带可操作信息：「WAV 只能写入 1 条音轨，当前有 3 条被保留（音轨 #1、#2、#3）。请只勾选一条，或把输出容器改成 MKV / MP4 / M4A」
+- 自检的 135 组合矩阵校验现在也覆盖多音轨能力（用容器自己支持的编码器 × 3 条音轨探测，
+  断言「能否写入」与 `MaxAudioStreams` 一致）
+
+注意规则顺序：先有「纯音频容器装不下视频流 → 自动丢弃视频并把容器换成合适的音频容器」，
+再判断音轨条数。两者是串联的 —— 若在视频容器 + flac 容器上直接判条数，
+会先被前一条规则把容器换成 m4a（支持多音轨）而永远触发不到，自检里为此专门标注了这一点。
+
 ### 2.10 音频码率：哪些编码器需要设、哪些设了也没用
 
 | 编码器 | `-b:a` 是否有效 | 实测结论 |
@@ -261,7 +284,7 @@ mov_text → mkv               ❌  「Subtitle codec mov_text is not supported�
 
 ## 六、自检覆盖矩阵
 
-`--selftest all` = 39 项，其中：
+`--selftest all` = 42 项，其中：
 
 **纯逻辑（不需要 ffmpeg，CI 里跑 `logic` 模式）**
 1. 内置预设清单完整性（数量、重名、引用的编码器与容器 id 必须真实存在）
@@ -276,7 +299,7 @@ mov_text → mkv               ❌  「Subtitle codec mov_text is not supported�
 8. 测试素材生成（testsrc2 1280×720 30fps 5s + AAC，以及内封字幕 MKV）
 
 **兼容性矩阵校验**
-8b. 容器 × 编码（126 个组合）逐个真跑，与表比对
+8b. 容器 × 编码 × 多音轨（135 个组合）逐个真跑，与表比对
 
 **转码矩阵（每项真跑并用 ffprobe 校验产出编码/分辨率/时长/像素格式/profile/音轨数）**
 9-19. 11 个编码器的简单模式

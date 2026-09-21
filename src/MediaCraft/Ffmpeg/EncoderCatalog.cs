@@ -95,6 +95,13 @@ public sealed class ContainerDefinition
     /// <summary>该容器允许的字幕编码器；空数组表示不支持内封字幕。</summary>
     public string[] SubtitleCodecs { get; init; } = [];
 
+    /// <summary>
+    /// 音轨条数上限；0 = 不限。实测：mp3 / flac / wav 只接受单条音轨，多条会直接写入失败：
+    /// 「Exactly one MP3 audio stream is required.」/「…FLAC audio stream is required.」/
+    /// 「wav muxer does not support more than one stream of type audio」。
+    /// </summary>
+    public int MaxAudioStreams { get; init; }
+
     /// <summary>下拉框的可访问名称。</summary>
     public override string ToString() => DisplayName;
 }
@@ -321,6 +328,8 @@ public static class EncoderCatalog
         {
             Extension = "mp3", DisplayName = "MP3（纯音频）", VideoCapable = false,
             AudioCodecs = ["libmp3lame"],
+            // 实测只接受单条音轨
+            MaxAudioStreams = 1,
         },
         new ContainerDefinition
         {
@@ -331,10 +340,14 @@ public static class EncoderCatalog
         {
             Extension = "flac", DisplayName = "FLAC（无损音频）", VideoCapable = false,
             AudioCodecs = ["flac"],
+            // 实测只接受单条音轨
+            MaxAudioStreams = 1,
         },
         new ContainerDefinition
         {
             Extension = "wav", DisplayName = "WAV（未压缩音频）", VideoCapable = false,
+            // 实测只接受单条音轨
+            MaxAudioStreams = 1,
             AudioCodecs =
             [
                 "aac", "libmp3lame", "ac3", "flac", "libvorbis", "pcm_s16le", "pcm_s24le", "pcm_s32le",

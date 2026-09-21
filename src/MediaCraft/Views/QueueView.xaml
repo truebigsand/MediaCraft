@@ -65,7 +65,26 @@
                          SelectedItem="{Binding SelectedJob, Mode=TwoWay}"
                          BorderThickness="0"
                          HorizontalContentAlignment="Stretch"
+                         PreviewMouseRightButtonDown="OnJobListRightClick"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <!-- 右键菜单条目按右键所在的任务生效（见 code-behind 的 _contextJob） -->
+                    <ListBox.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="取消此任务" Click="OnCancelContextJobClick" />
+                            <MenuItem Header="重试此任务" Click="OnRetryContextJobClick" />
+                            <Separator />
+                            <MenuItem Header="上移" Click="OnMoveContextJobUpClick" />
+                            <MenuItem Header="下移" Click="OnMoveContextJobDownClick" />
+                            <Separator />
+                            <MenuItem Header="复制 ffmpeg 命令行" Click="OnCopyCommandClick" />
+                            <MenuItem Header="复制源文件路径" Click="OnCopySourcePathClick" />
+                            <MenuItem Header="打开输出文件" Click="OnOpenOutputFileClick" />
+                            <MenuItem Header="打开输出位置" Click="OnOpenOutputClick" />
+                            <Separator />
+                            <MenuItem Header="从队列移除" Click="OnRemoveContextJobClick" />
+                            <MenuItem Header="清空已完成" Click="OnClearFinishedJobsClick" />
+                        </ContextMenu>
+                    </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Border BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="0,0,0,1" Padding="8,6">

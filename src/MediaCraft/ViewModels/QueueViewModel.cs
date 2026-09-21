@@ -181,6 +181,38 @@ public sealed partial class QueueViewModel : ObservableObject
 
     private TranscodeJob? FirstActive() => Jobs.FirstOrDefault(j => j.IsActive);
 
+    // ── 右键菜单用的按任务操作 ──
+
+    public void CancelJob(TranscodeJob job)
+    {
+        _queue.Cancel(job);
+        RefreshSummary();
+    }
+
+    public void RetryJob(TranscodeJob job)
+    {
+        _queue.RetryJob(job);
+        RefreshSummary();
+    }
+
+    public void MoveJob(TranscodeJob job, int offset)
+    {
+        _queue.MoveJob(job, offset);
+        RefreshSummary();
+    }
+
+    public void RemoveJob(TranscodeJob job)
+    {
+        _queue.Remove(job);
+        RefreshSummary();
+    }
+
+    public void ClearFinishedJobs()
+    {
+        _queue.ClearFinished();
+        RefreshSummary();
+    }
+
     private void OnQueueChanged()
     {
         RefreshSummary();

@@ -47,6 +47,9 @@ public static class SelfTest
         /// <summary>预期音频声道数。</summary>
         public int? ExpectAudioChannels { get; init; }
 
+        /// <summary>预期输出里的音轨条数（验证容器对多音轨的支持）。</summary>
+        public int? ExpectAudioStreamCount { get; init; }
+
         /// <summary>主步骤命令行里必须出现的参数片段。</summary>
         public string[] RequireArguments { get; init; } = [];
 
@@ -100,6 +103,9 @@ public static class SelfTest
         public required string ExternalSubtitlePath { get; init; }
 
         public required string SubtitleOnlyPath { get; init; }
+
+        /// <summary>三音轨素材（用于验证容器对多音轨的支持差异）。</summary>
+        public required string ThreeAudioPath { get; init; }
 
         public required FfmpegPaths Paths { get; init; }
 
@@ -255,6 +261,7 @@ public static class SelfTest
             var sampleWithSubtitlePath = Path.Combine(chineseDirectory, "有字幕.mkv");
             var externalSubtitlePath = Path.Combine(chineseDirectory, "外挂 字幕.srt");
             var subtitleOnlyPath = Path.Combine(workDirectory, "待转换.srt");
+            var threeAudioPath = Path.Combine(workDirectory, "sample-3audio.mkv");
 
             var sampleOk = await FfmpegAsync(paths,
                 "-y", "-v", "error",
@@ -287,6 +294,19 @@ public static class SelfTest
                 sampleWithSubtitlePath).ConfigureAwait(false);
             Write($"  有字幕.mkv（内封 srt 字幕轨）: {(muxOk.Ok ? "✓" : "✗ " + FirstLine(muxOk.Output))}");
 
+            var multiAudioOk = await FfmpegAsync(paths,
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30",
+                "-f", "lavfi", "-i", "sine=f=440",
+                "-f", "lavfi", "-i", "sine=f=550",
+                "-f", "lavfi", "-i", "sine=f=660",
+                "-t", "3",
+                "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a",
+                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                threeAudioPath).ConfigureAwait(false);
+            Write($"  sample-3audio.mkv（1 视频 + 3 条音轨）: {(multiAudioOk.Ok ? "✓" : "✗ " + FirstLine(multiAudioOk.Output))}");
+
             if (!sampleOk.Ok || !muxOk.Ok)
             {
                 Write("  ✗ 素材生成失败，终止。");
@@ -315,6 +335,7 @@ public static class SelfTest
                 SampleWithSubtitlePath = sampleWithSubtitlePath,
                 ExternalSubtitlePath = externalSubtitlePath,
                 SubtitleOnlyPath = subtitleOnlyPath,
+                ThreeAudioPath = threeAudioPath,
                 Paths = paths,
                 Capabilities = capabilities,
             };
@@ -465,6 +486,23 @@ public static class SelfTest
                         "-f", muxer, Path.Combine(probeDirectory, $"a-{container.Extension}"),
                     ]));
             }
+
+            // 多音轨能力：实测 mp3 / flac / wav 只接受单条音轨，多条会直接写入失败。
+            // 用容器自己支持的第一个音频编码器来探测，确保失败只可能来自「条数」而不是「编码器」。
+            var multiCodec = container.AudioCodecs.FirstOrDefault() ?? "aac";
+            probes.Add((
+                $"多音轨（3 条）→ {container.Extension}",
+                container.MaxAudioStreams != 1,
+                [
+                    "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "sine=f=440",
+                    "-f", "lavfi", "-i", "sine=f=550",
+                    "-f", "lavfi", "-i", "sine=f=660",
+                    "-t", "0.2",
+                    "-map", "0:a", "-map", "1:a", "-map", "2:a",
+                    "-c:a", multiCodec,
+                    "-f", muxer, Path.Combine(probeDirectory, $"m-{container.Extension}"),
+                ]));
 
             if (container.SubtitleCodecs.Length == 0)
             {
@@ -1129,6 +1167,39 @@ public static class SelfTest
                 ExpectEffectiveAudioBitrateKbps = 192,
             });
 
+        // ── 多音轨：容器差异（实测 mp3/flac/wav 只接受单条音轨）──
+        var threeAudioInfo = MediaProbe
+            .ProbeAsync(context.Paths.Ffprobe, context.ThreeAudioPath)
+            .GetAwaiter().GetResult();
+        if (threeAudioInfo is not null && threeAudioInfo.AudioStreams.Count == 3)
+        {
+            TranscodeParams ThreeAudio(string container) => new TranscodeParams
+            {
+                EncoderId = "h264_nvenc",
+                Container = container,
+            };
+
+            cases.Add((
+                "多音轨 · 3 条音轨 → MKV（应全部保留）",
+                context.ThreeAudioPath,
+                ThreeAudio("mkv"),
+                new Expectation { CodecName = "h264", ExpectAudio = true, ExpectAudioStreamCount = 3, ContainerExtension = "mkv" }));
+
+            cases.Add((
+                "多音轨 · 3 条音轨 → MP4（应全部保留）",
+                context.ThreeAudioPath,
+                ThreeAudio("mp4"),
+                new Expectation { CodecName = "h264", ExpectAudio = true, ExpectAudioStreamCount = 3, ContainerExtension = "mp4" }));
+
+            // 注意必须显式丢弃视频：否则「纯音频容器装不下视频流」那条规则会先把容器
+            // 自动改成 M4A（支持多音轨），单音轨规则就没机会触发 —— 顺序上两者是串联的。
+            cases.Add((
+                "多音轨 · 丢弃视频 + FLAC 容器 + 3 条音轨（单音轨容器，预检必须拦下）",
+                context.ThreeAudioPath,
+                new TranscodeParams { EncoderId = "h264_nvenc", Container = "flac", VideoMode = VideoMode.Drop },
+                new Expectation { ExpectPreflightBlocked = true }));
+        }
+
         // ── 纯音频提取 ──
         Add(
             "提取音频 · 丢弃视频 → m4a",
@@ -1388,6 +1459,11 @@ public static class SelfTest
         if (expectation.ExpectAudioChannels is not null && producedAudio?.Channels != expectation.ExpectAudioChannels)
         {
             result.Failures.Add($"音频声道数不符：期望 {expectation.ExpectAudioChannels}，实际 {producedAudio?.Channels}");
+        }
+
+        if (expectation.ExpectAudioStreamCount is not null && produced.AudioStreams.Count != expectation.ExpectAudioStreamCount)
+        {
+            result.Failures.Add($"音轨条数不符：期望 {expectation.ExpectAudioStreamCount}，实际 {produced.AudioStreams.Count}");
         }
 
         // 命令行层面的断言：有些行为（例如无损编码不传 -b:a）只能从参数看出来

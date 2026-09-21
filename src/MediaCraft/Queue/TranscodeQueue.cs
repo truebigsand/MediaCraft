@@ -184,6 +184,21 @@ public sealed partial class TranscodeQueue : ObservableObject
         }
     }
 
+    /// <summary>重试单个失败/取消的任务。</summary>
+    public void RetryJob(TranscodeJob job)
+    {
+        if (job.State is not (JobState.Failed or JobState.Canceled))
+        {
+            return;
+        }
+
+        job.ResetForRetry();
+        AppLog.Info($"重试任务：{job.SourceName}", "Queue");
+        IsPaused = false;
+        SaveDebounced();
+        Dispatch();
+    }
+
     /// <summary>从队列移除一项（执行中的需先取消）。</summary>
     public void Remove(TranscodeJob job)
     {

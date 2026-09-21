@@ -307,6 +307,30 @@ public static class PreflightValidator
             }
         }
 
+        // ── 7b. 单音轨容器 + 多条音轨 ──
+        // 实测：mp3 / flac / wav 只接受一条音轨，多条会让整个转码以 muxer 错误失败。
+        // 这里**只拦不修**：自动丢掉用户勾选的音轨属于静默数据丢失，
+        // 必须由人来决定保留哪一条（或换容器）。
+        if (container.MaxAudioStreams > 0)
+        {
+            var keptAudio = effective.AudioTracks
+                .Where(t => t.IsSelected && t.Action != AudioActionKind.Drop)
+                .ToArray();
+
+            if (keptAudio.Length > container.MaxAudioStreams)
+            {
+                issues.Add(new PreflightIssue
+                {
+                    Severity = IssueSeverity.Error,
+                    Title = "该容器只支持单条音轨",
+                    Detail = $"{container.DisplayName.Split('（')[0]} 只能写入 1 条音轨，" +
+                             $"当前有 {keptAudio.Length} 条被保留" +
+                             $"（音轨 #{string.Join("、#", keptAudio.Select(t => t.StreamIndex))}）。" +
+                             "请只勾选一条，或把输出容器改成 MKV / MP4 / M4A",
+                });
+            }
+        }
+
         // ── 8a. 固定码率档位取整（AC3 等）──
         // 实测：AC3 填 200k 实际得到 192k、填 1000k 得到 640k —— ffmpeg 静默取整，
         // 界面只给合法档位，但预设/导入的 JSON 仍可能带来非法值，这里兜底并告知。

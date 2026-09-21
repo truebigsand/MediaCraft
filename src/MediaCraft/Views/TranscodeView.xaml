@@ -50,7 +50,26 @@
                               SelectionMode="Extended"
                               SelectedItem="{Binding SelectedFile, Mode=TwoWay}"
                               BorderThickness="0"
+                              PreviewMouseRightButtonDown="OnFileListRightClick"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <!--
+                            右键菜单挂在 ListView 上（单个实例），右键落在哪一行由
+                            PreviewMouseRightButtonDown 记下来。不放进 ItemContainerStyle 的 Setter：
+                            Setter 的值是所有行共享的同一个实例，DataContext 会停在第一行 —— WPF 经典坑。
+                        -->
+                        <ListView.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="加入队列（选中项）" Click="OnEnqueueSelectedClick" />
+                                <MenuItem Header="只加入队列（右键这一个）" Click="OnEnqueueContextFileClick" />
+                                <Separator />
+                                <MenuItem Header="复制文件路径" Click="OnCopyFilePathClick" />
+                                <MenuItem Header="在资源管理器中显示" Click="OnRevealFileClick" />
+                                <MenuItem Header="用默认程序打开" Click="OnOpenFileClick" />
+                                <Separator />
+                                <MenuItem Header="移除" Click="OnRemoveContextFileClick" />
+                                <MenuItem Header="清空列表" Click="OnClearFilesClick" />
+                            </ContextMenu>
+                        </ListView.ContextMenu>
                         <ListView.View>
                             <GridView>
                                 <GridViewColumn Header="文件名" Width="180">
