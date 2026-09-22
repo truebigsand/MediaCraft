@@ -36,6 +36,9 @@ public sealed partial class TranscodeViewModel : ObservableObject
     /// <summary>正在把预检修正写回参数（防止写回触发的属性变更再次进入预检）。</summary>
     private bool _applyingPreflightFix;
 
+    /// <summary>正在把轨道选择铺到其它文件（防止写回目标文件时再次触发同步，形成来回同步）。</summary>
+    private bool _isPropagatingTracks;
+
     public TranscodeViewModel(FfmpegContext ffmpeg, SettingsService settings, TranscodeQueue queue, PresetStore presets)
     {
         _ffmpeg = ffmpeg;
@@ -445,36 +448,47 @@ public sealed partial class TranscodeViewModel : ObservableObject
     ///
     /// 与标量分开跑：轨道的同步要先按目标文件自己的流列表重建、再按位置搬运，
     /// 比复制标量贵得多，所以只在轨道真的变化时触发，不跟着滑块拖动走。
+    ///
+    /// 重入保护是必须的：每个文件的参数对象都订阅了属性变化，写回目标文件时会再次进到这里，
+    /// 没有这道闸就会互相来回同步（表现为切换音轨动作直接卡死）。
     /// </summary>
     private void PropagateTracksToAllIfNeeded()
     {
-        if (!SyncToAllFiles || Files.Count == 0)
+        if (!SyncToAllFiles || Files.Count == 0 || _isPropagatingTracks)
         {
             return;
         }
 
-        var changed = 0;
-        foreach (var file in Files)
+        _isPropagatingTracks = true;
+        try
         {
-            if (ReferenceEquals(file.Parameters, Params))
+            var changed = 0;
+            foreach (var file in Files)
             {
-                continue;
+                if (ReferenceEquals(file.Parameters, Params))
+                {
+                    continue;
+                }
+
+                // 流索引因文件而异：先按目标文件自己的流列表重建，再把当前文件的轨道动作搬过去
+                if (file.Info is not null)
+                {
+                    file.Parameters.InitializeTracksFrom(file.Info, resetExisting: true);
+                }
+
+                file.Parameters.ApplyTracksFrom(Params);
+                file.RefreshSummary();
+                changed++;
             }
 
-            // 流索引因文件而异：先按目标文件自己的流列表重建，再把当前文件的轨道动作搬过去
-            if (file.Info is not null)
+            if (changed > 0)
             {
-                file.Parameters.InitializeTracksFrom(file.Info, resetExisting: true);
+                OnPropertyChanged(nameof(ScopeText));
             }
-
-            file.Parameters.ApplyTracksFrom(Params);
-            file.RefreshSummary();
-            changed++;
         }
-
-        if (changed > 0)
+        finally
         {
-            OnPropertyChanged(nameof(ScopeText));
+            _isPropagatingTracks = false;
         }
     }
 

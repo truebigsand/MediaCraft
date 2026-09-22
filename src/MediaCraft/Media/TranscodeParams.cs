@@ -576,25 +576,63 @@ public sealed partial class TranscodeParams : ObservableObject
     /// </summary>
     public void ApplyTracksFrom(TranscodeParams source)
     {
+        // 只在值真的不同时才写：无条件赋值会一路触发 PropertyChanged，而各文件的参数对象
+        // 都订阅了「同步给其它文件」，会互相来回同步到 UI 卡死。值相同时不写，这条链自然收敛。
         for (var index = 0; index < Math.Min(AudioTracks.Count, source.AudioTracks.Count); index++)
         {
             var target = AudioTracks[index];
             var origin = source.AudioTracks[index];
-            target.IsSelected = origin.IsSelected;
-            target.Action = origin.Action;
-            target.CodecId = origin.CodecId;
-            target.BitRateKbps = origin.BitRateKbps;
-            target.TargetChannels = origin.TargetChannels;
-            target.SampleRate = origin.SampleRate;
+
+            if (target.IsSelected != origin.IsSelected)
+            {
+                target.IsSelected = origin.IsSelected;
+            }
+
+            if (target.Action != origin.Action)
+            {
+                target.Action = origin.Action;
+            }
+
+            if (!string.Equals(target.CodecId, origin.CodecId, StringComparison.Ordinal))
+            {
+                target.CodecId = origin.CodecId;
+            }
+
+            if (target.BitRateKbps != origin.BitRateKbps)
+            {
+                target.BitRateKbps = origin.BitRateKbps;
+            }
+
+            if (target.TargetChannels != origin.TargetChannels)
+            {
+                target.TargetChannels = origin.TargetChannels;
+            }
+
+            if (target.SampleRate != origin.SampleRate)
+            {
+                target.SampleRate = origin.SampleRate;
+            }
         }
 
         for (var index = 0; index < Math.Min(SubtitleTracks.Count, source.SubtitleTracks.Count); index++)
         {
             var target = SubtitleTracks[index];
             var origin = source.SubtitleTracks[index];
-            target.IsSelected = origin.IsSelected;
-            target.Action = origin.Action;
-            target.ExtractFormat = origin.ExtractFormat;
+
+            if (target.IsSelected != origin.IsSelected)
+            {
+                target.IsSelected = origin.IsSelected;
+            }
+
+            if (target.Action != origin.Action)
+            {
+                target.Action = origin.Action;
+            }
+
+            if (target.ExtractFormat != origin.ExtractFormat)
+            {
+                target.ExtractFormat = origin.ExtractFormat;
+            }
         }
     }
 
