@@ -140,7 +140,7 @@
                         <TextBlock Text="参数作用域" Style="{StaticResource SectionTitle}" />
                         <TextBlock Text="{Binding ScopeText}" Style="{StaticResource HintText}" TextWrapping="Wrap" />
 
-                        <CheckBox Content="改参数时同步到列表里所有文件（轨道选择仍各自独立）"
+                        <CheckBox Content="改参数时同步到列表里所有文件（含音轨与字幕选择）"
                                   IsChecked="{Binding SyncToAllFiles, Mode=TwoWay}"
                                   Margin="0,6,0,0" />
 

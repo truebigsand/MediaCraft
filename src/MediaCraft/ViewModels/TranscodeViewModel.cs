@@ -152,7 +152,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
             }
 
             return SyncToAllFiles
-                ? $"当前参数作用于全部 {Files.Count} 个文件（轨道选择各自独立）"
+                ? $"当前参数作用于全部 {Files.Count} 个文件（含音轨与字幕选择）"
                 : $"当前参数只作用于「{SelectedFile.FileName}」，其余 {Files.Count - 1} 个文件不受影响";
         }
     }
@@ -412,7 +412,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
     /// <summary>
     /// 同步开关打开时，把当前面板的标量参数铺到列表里所有文件。
-    /// 只复制标量（便宜，可以跟着拖动实时跑）；轨道选择保持各文件独立。
+    /// 只复制标量（便宜，可以跟着拖动实时跑）；轨道选择走 <see cref="PropagateTracksToAllIfNeeded"/>。
     /// </summary>
     private void PropagateToAllIfNeeded()
     {
@@ -440,12 +440,51 @@ public sealed partial class TranscodeViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 同步开关打开时，把当前面板的轨道选择（音轨与字幕的动作、编码、码率等）铺到其它文件。
+    ///
+    /// 与标量分开跑：轨道的同步要先按目标文件自己的流列表重建、再按位置搬运，
+    /// 比复制标量贵得多，所以只在轨道真的变化时触发，不跟着滑块拖动走。
+    /// </summary>
+    private void PropagateTracksToAllIfNeeded()
+    {
+        if (!SyncToAllFiles || Files.Count == 0)
+        {
+            return;
+        }
+
+        var changed = 0;
+        foreach (var file in Files)
+        {
+            if (ReferenceEquals(file.Parameters, Params))
+            {
+                continue;
+            }
+
+            // 流索引因文件而异：先按目标文件自己的流列表重建，再把当前文件的轨道动作搬过去
+            if (file.Info is not null)
+            {
+                file.Parameters.InitializeTracksFrom(file.Info, resetExisting: true);
+            }
+
+            file.Parameters.ApplyTracksFrom(Params);
+            file.RefreshSummary();
+            changed++;
+        }
+
+        if (changed > 0)
+        {
+            OnPropertyChanged(nameof(ScopeText));
+        }
+    }
+
     partial void OnSyncToAllFilesChanged(bool value)
     {
         _settings.Current.SyncParamsToAllFiles = value;
         _settings.ScheduleSave();
         OnPropertyChanged(nameof(ScopeText));
         PropagateToAllIfNeeded();
+        PropagateTracksToAllIfNeeded();
     }
 
     [RelayCommand]
@@ -754,6 +793,10 @@ public sealed partial class TranscodeViewModel : ObservableObject
             SelectedFile?.RefreshSummary();
             PropagateToAllIfNeeded();
 
+            // 预检也可能改轨道（例如音轨在目标容器里装不下要改成重编码）：
+            // 同样要铺给其它文件，否则「面板显示的」和「别的文件执行时用的」会不一致
+            PropagateTracksToAllIfNeeded();
+
             AppLog.Info(
                 $"预检自动调整了参数并已同步到参数面板（{result.Issues.Count(i => i.WasFixed)} 处修正）",
                 "Transcode");
@@ -982,6 +1025,12 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
         SelectedFile?.RefreshSummary();
         ScheduleRevalidate();
+
+        // 轨道选项（音轨/字幕的动作、编码、码率、选择）也跟随同步开关铺到其它文件
+        if (sender is AudioTrackParams or SubtitleTrackParams)
+        {
+            PropagateTracksToAllIfNeeded();
+        }
     }
 
     private void OnParamsPropertyChanged(object? sender, PropertyChangedEventArgs e)
