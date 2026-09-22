@@ -469,6 +469,21 @@ public static class SelfTest
                 }
 
                 Write(string.Empty);
+                Write("[4d] 编码器 profile 取值校验（界面给出的值逐个真跑一次）");
+                var profileCase = await VerifyEncoderProfilesAsync(paths, workDirectory, context).ConfigureAwait(false);
+                results.Add(profileCase);
+                Write($"  {(profileCase.Passed ? "✓ PASS" : "✗ FAIL")}  {profileCase.Name}");
+                foreach (var detail in profileCase.Details)
+                {
+                    Write($"          {detail}");
+                }
+
+                foreach (var failure in profileCase.Failures)
+                {
+                    Write($"          ! {failure}");
+                }
+
+                Write(string.Empty);
                 Write("[5] 转码矩阵（每项都真跑，并用 ffprobe 校验产出）");
 
                 var definitions = BuildCases(context);
@@ -1495,6 +1510,98 @@ public static class SelfTest
         return result;
     }
 
+    /// <summary>
+    /// 逐个探测「界面上给出的 profile 值」是否真被编码器接受。
+    ///
+    /// 这些值会被原样传给 <c>-profile:v</c>，而各编码器的取值域差别很大：
+    /// av1_nvenc 不认 "main"（只认 main10 或数字）、QSV 系的 -profile 只吃数字、
+    /// 软件 AV1 只有 main —— 写错一个，用户一选就失败。
+    /// </summary>
+    private static async Task<CaseResult> VerifyEncoderProfilesAsync(
+        FfmpegPaths paths,
+        string workDirectory,
+        Context context)
+    {
+        var result = new CaseResult { Name = "界面提供的 profile 值都被编码器接受" };
+        var probeDirectory = Path.Combine(workDirectory, "profiles");
+        Directory.CreateDirectory(probeDirectory);
+
+        var mismatches = new List<string>();
+        var skipped = new List<string>();
+        var tested = 0;
+        var gate = new SemaphoreSlim(3);
+        var tasks = new List<Task>();
+
+        foreach (var encoder in EncoderCatalog.All)
+        {
+            if (encoder.Profiles.Length == 0)
+            {
+                continue;
+            }
+
+            if (!context.EncoderAvailable(encoder.Id))
+            {
+                skipped.Add(encoder.Id);
+                continue;
+            }
+
+            foreach (var profile in encoder.Profiles)
+            {
+                var encoderId = encoder.Id;
+                var profileValue = profile;
+                tasks.Add(Task.Run(async () =>
+                {
+                    await gate.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        var run = await ProcessRunner.RunAsync(
+                            paths.Ffmpeg,
+                            [
+                                "-y", "-v", "error",
+                                "-i", context.TinySamplePath,
+                                "-map", "0:v:0", "-an",
+                                "-c:v", encoderId,
+                                "-profile:v", profileValue,
+                                "-f", "null", "-",
+                            ],
+                            CancellationToken.None,
+                            60000).ConfigureAwait(false);
+
+                        Interlocked.Increment(ref tested);
+                        if (!run.Succeeded)
+                        {
+                            lock (mismatches)
+                            {
+                                mismatches.Add(
+                                    $"{encoderId} 的 profile「{profileValue}」被拒绝：{FirstLine(run.StandardError)}");
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        gate.Release();
+                    }
+                }));
+            }
+        }
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        result.Details.Add($"探测 {tested} 个「编码器 × profile」组合，全部被接受");
+        if (skipped.Count > 0)
+        {
+            result.Details.Add("本机不可用、已跳过：" + string.Join("、", skipped));
+        }
+
+        foreach (var mismatch in mismatches)
+        {
+            result.Failures.Add(mismatch);
+        }
+
+        result.Passed = result.Failures.Count == 0;
+        return result;
+    }
+
     /// <summary>构造全部用例。</summary>
     private static List<(string Name, string SourcePath, TranscodeParams Parameters, Expectation Expectation)> BuildCases(
         Context context)    {
@@ -2135,6 +2242,27 @@ public static class SelfTest
                 null,
                 null,
                 CancellationToken.None).ConfigureAwait(false);
+
+            // 硬件编码器（尤其 Intel QSV）偶发失败：同一个命令连跑几次就会有一次报错
+            //（退出码 183 或 -1094995529）。这里重试一次，仍失败才算失败 ——
+            // 否则 CI 会因为这种运行时抖动假红。重试前必须清掉残留输出，
+            // 因为这些用例用的是 -n（不覆盖），留着半成品会让第二次直接跳过并误判成功。
+            if (!run.Success && step.Kind == TranscodeStepKind.Transcode)
+            {
+                result.Details.Add($"{step.Label} 首次失败（退出码 {run.ExitCode}），重试一次");
+
+                if (step.ProducesFile && step.OutputPath.Length > 0 && step.OutputPath != "-")
+                {
+                    TryDelete(step.OutputPath);
+                }
+
+                run = await TranscodeRunner.RunAsync(
+                    context.Paths.Ffmpeg,
+                    step,
+                    null,
+                    null,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
 
             if (!run.Success)
             {

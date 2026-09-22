@@ -241,7 +241,9 @@ public static class EncoderCatalog
             TwoPassRequiresBitrate = false,
             QualityParam = "-cq", QualityLabel = "CQ", QualityMax = 51,
             Presets = NvencPresets, DefaultPreset = "p5", Tunes = NvencTunes,
-            Profiles = ["main"],
+            // 实测：av1_nvenc 不接受 "main"（Unable to parse "profile" option value "main"），
+            // 它认的是 main10 或数字 0/1 —— 这里只列真能用的值
+            Profiles = ["main10"],
             SupportsTenBit = true, MaxWidth = 7680, MaxHeight = 4320,
         },
         new EncoderDefinition
@@ -265,7 +267,8 @@ public static class EncoderCatalog
             TwoPassArguments = ["-extbrc", "1"],
             QualityParam = "-global_quality", QualityLabel = "全局质量", QualityMax = 51,
             Presets = QsvPresets, DefaultPreset = "medium",
-            Profiles = ["main", "main10"],
+            // 实测：hevc_qsv 不接受 "main10"（10bit 输出本身没问题，它的 -profile 只认数字）
+            Profiles = ["main"],
             SupportsTenBit = true, MaxWidth = 7680, MaxHeight = 4320,
         },
         new EncoderDefinition
@@ -322,7 +325,8 @@ public static class EncoderCatalog
             TwoPassKind = TwoPassKind.ExternalPass,
             QualityParam = "-crf", QualityLabel = "CRF", QualityMax = 63,
             Presets = SvtAv1Presets, DefaultPreset = "6",
-            Profiles = ["main", "high", "professional"],
+            // 实测：只认 main（high / professional 会被 libsvtav1 拒绝）
+            Profiles = ["main"],
             SupportsTenBit = true, MaxWidth = 7680, MaxHeight = 4320,
         },
         new EncoderDefinition
@@ -333,7 +337,8 @@ public static class EncoderCatalog
             QualityParam = "-crf", QualityLabel = "CRF", QualityMax = 63,
             PresetParam = "-cpu-used",
             Presets = AomPresets, DefaultPreset = "6",
-            Profiles = ["main", "high", "professional"],
+            // 实测：只认 main（high / professional 会被 libaom 拒绝）
+            Profiles = ["main"],
             SupportsTenBit = true, MaxWidth = 7680, MaxHeight = 4320,
         },
     ];
