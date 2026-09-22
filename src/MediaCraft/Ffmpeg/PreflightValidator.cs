@@ -469,6 +469,9 @@ public static class PreflightValidator
                 });
             }
 
+            var sourcePixelFormat = info.VideoStream?.PixelFormat ?? string.Empty;
+            var userSetPixelFormat = !string.IsNullOrWhiteSpace(effective.PixelFormat);
+
             if (EncoderCatalog.NeedsYuv420Conversion(encoder, info.VideoStream, effective.PixelFormat))
             {
                 var conversion = EncoderCatalog.BuildYuv420ConversionFilter(encoder, info.VideoStream, effective.PixelFormat);
@@ -480,7 +483,20 @@ public static class PreflightValidator
                 {
                     Severity = IssueSeverity.Info,
                     Title = "会自动转换成 4:2:0",
-                    Detail = $"{encoder.DisplayName} 只接受 4:2:0 输入，源是 {info.VideoStream?.PixelFormat}，将转成 {target}（色度采样减半）",
+                    Detail = $"{encoder.DisplayName} 的输出固定为 4:2:0，源是 {sourcePixelFormat}，将转成 {target}（色度采样减半）",
+                });
+            }
+            else if (!userSetPixelFormat &&
+                     !string.IsNullOrWhiteSpace(sourcePixelFormat) &&
+                     !EncoderCatalog.IsYuv420(sourcePixelFormat))
+            {
+                // 编码器会原样保留 4:2:2 / 4:4:4：输出合法，但硬件播放器与电视普遍不认，给一条可操作的提示
+                issues.Add(new PreflightIssue
+                {
+                    Severity = IssueSeverity.Info,
+                    Title = "输出会保留 4:2:2 / 4:4:4",
+                    Detail = $"源是 {sourcePixelFormat}，{encoder.DisplayName} 会原样保留色度采样；这类输出在多数硬件播放器与电视上无法播放。" +
+                             "需要标准 4:2:0 的话，在高级模式里把像素格式设为 yuv420p 即可",
                 });
             }
         }

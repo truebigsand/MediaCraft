@@ -1190,15 +1190,18 @@ public static class SelfTest
                  {
                      ("av1_nvenc", true),
                      ("h264_qsv", true), ("hevc_qsv", true), ("av1_qsv", true), ("vp9_qsv", true),
+                     // libsvtav1 只做 4:2:0：不显式转换的话 ffmpeg 会静默降级，显式给 professional 又直接报错
+                     ("libsvtav1", true),
+                     // 其余编码器能原样保留 4:2:2（libaom 会升到 Professional profile），只提示不转换
                      ("h264_nvenc", false), ("hevc_nvenc", false),
-                     ("libx264", false), ("libx265", false), ("libsvtav1", false),
+                     ("libx264", false), ("libx265", false), ("libaom-av1", false),
                  })
         {
             var encoder = EncoderCatalog.Get(encoderId);
             if (encoder.NeedsYuv420Input != needsYuv420)
             {
                 yuv420Case.Failures.Add(
-                    $"{encoderId} 的 NeedsYuv420Input 应为 {needsYuv420}（实测 QSV 家族与 av1_nvenc 都只收 4:2:0）");
+                    $"{encoderId} 的 NeedsYuv420Input 应为 {needsYuv420}（实测 QSV 家族、av1_nvenc、libsvtav1 都只做 4:2:0）");
             }
         }
 
@@ -1602,6 +1605,42 @@ public static class SelfTest
                     ContainerExtension = "mp4",
                     RequireArguments = ["format=nv12"],
                     ForbidArguments = ["vpp_qsv"],
+                }));
+        }
+
+        // ── SVT-AV1 只做 4:2:0：不显式转换时 ffmpeg 会**静默**降级（实测），用户看不到，
+        //    所以这里断言命令里必须出现我们插入的转换 ──
+        if (yuv422Info is not null && context.EncoderAvailable("libsvtav1"))
+        {
+            cases.Add((
+                "SVT-AV1 · 4:2:2 10bit 源（显式转 4:2:0，不是静默降级）",
+                context.Yuv422Path,
+                BaseFrom(yuv422Info, "libsvtav1"),
+                new Expectation
+                {
+                    CodecName = "av1",
+                    PixelFormat = "yuv420p10le",
+                    Width = 320,
+                    Height = 180,
+                    ContainerExtension = "mp4",
+                    RequireArguments = ["format=yuv420p10le"],
+                }));
+        }
+
+        // ── libaom 能原样保留 4:2:2（自动升到 Professional profile），不强制转换，但也得能跑通 ──
+        if (yuv422Info is not null && context.EncoderAvailable("libaom-av1"))
+        {
+            cases.Add((
+                "libaom · 4:2:2 10bit 源（保留 4:2:2，Professional profile）",
+                context.Yuv422Path,
+                BaseFrom(yuv422Info, "libaom-av1"),
+                new Expectation
+                {
+                    CodecName = "av1",
+                    Profile = "Professional",
+                    PixelFormat = "yuv422p10le",
+                    ContainerExtension = "mp4",
+                    ForbidArguments = ["format=yuv420"],
                 }));
         }
 

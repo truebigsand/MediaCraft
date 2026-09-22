@@ -316,6 +316,9 @@ public static class EncoderCatalog
         {
             Id = "libsvtav1", DisplayName = "AV1 / SVT-AV1（CPU 软编，速度与压缩比均衡）",
             Codec = "av1", Family = EncoderFamily.SvtAv1,
+            // SVT-AV1 只做 4:2:0：4:2:2 源若不显式转换，ffmpeg 会**静默**降成 4:2:0（用户看不到），
+            // 显式指定 professional profile 则直接报 bad parameter。标上它，由我们插转换并提示。
+            NeedsYuv420Input = true,
             TwoPassKind = TwoPassKind.ExternalPass,
             QualityParam = "-crf", QualityLabel = "CRF", QualityMax = 63,
             Presets = SvtAv1Presets, DefaultPreset = "6",
