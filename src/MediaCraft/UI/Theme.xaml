@@ -176,8 +176,9 @@
         <Setter Property="Padding" Value="8" />
     </Style>
 
-    <!-- Expander 的默认模板在「标题在上、内容在下」时箭头方向反直觉（折叠 ▶、展开 ▼）。
-         这里改成折叠 ▼、展开 ▲，并把整行标题做成可点击区域。 -->
+    <!-- Expander 的默认模板箭头方向是「折叠 ▶ / 展开 ▼」，对「标题在上、内容在下」的布局来说
+         折叠时不该指向右边。这里保持系统那种小三角外观，只把上下方向对调：
+         折叠 ▲（内容收起）、展开 ▼（指向下方展开的内容）。 -->
     <Style TargetType="Expander">
         <Setter Property="Template">
             <Setter.Value>
@@ -191,24 +192,24 @@
                                 <ControlTemplate TargetType="ToggleButton">
                                     <Border Background="Transparent" Padding="0,2">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock x:Name="Arrow"
-                                                       Text="▼"
-                                                       Width="10"
-                                                       FontSize="9"
-                                                       TextAlignment="Center"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{StaticResource MutedBrush}" />
+                                            <Path x:Name="Arrow"
+                                                  Data="M 0,4 L 8,4 L 4,0 Z"
+                                                  Fill="{StaticResource MutedBrush}"
+                                                  Width="8"
+                                                  Height="4"
+                                                  Stretch="Fill"
+                                                  VerticalAlignment="Center"
+                                                  Margin="1,0,7,0" />
                                             <ContentPresenter Content="{Binding Header, RelativeSource={RelativeSource AncestorType=Expander}}"
-                                                              Margin="4,0,0,0"
                                                               VerticalAlignment="Center" />
                                         </StackPanel>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsChecked" Value="True">
-                                            <Setter TargetName="Arrow" Property="Text" Value="▲" />
+                                            <Setter TargetName="Arrow" Property="Data" Value="M 0,0 L 8,0 L 4,4 Z" />
                                         </Trigger>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="Arrow" Property="Foreground" Value="{StaticResource TextBrush}" />
+                                            <Setter TargetName="Arrow" Property="Fill" Value="{StaticResource TextBrush}" />
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
