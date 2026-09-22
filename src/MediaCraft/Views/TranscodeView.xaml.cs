@@ -205,6 +205,19 @@ public partial class TranscodeView : UserControl
         _contextFile = null;
     }
 
+    private void OnRefreshContextFileClick(object sender, RoutedEventArgs e)
+    {
+        var viewModel = ViewModel;
+        var file = ContextFile;
+        if (viewModel is null || file is null)
+        {
+            return;
+        }
+
+        viewModel.RefreshMetadataCommand.Execute(file);
+        _contextFile = null;
+    }
+
     private void CopyToClipboard(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))

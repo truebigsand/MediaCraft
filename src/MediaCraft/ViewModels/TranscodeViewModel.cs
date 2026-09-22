@@ -349,8 +349,7 @@ public sealed partial class TranscodeViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void RemoveSelected(MediaFileViewModel? file)
-    {
+    private void RemoveSelected(MediaFileViewModel? file)    {
         var target = file ?? SelectedFile;
         if (target is null)
         {
@@ -366,6 +365,50 @@ public sealed partial class TranscodeViewModel : ObservableObject
 
         StatusText = $"已移除，剩余 {Files.Count} 个文件";
 
+    }
+
+    /// <summary>
+    /// 重新探测选中文件的元数据（文件被外部工具改过、或首次探测失败时用）。
+    /// 探测结果会重建该文件的轨道列表并按新流列表刷新摘要；
+    /// 如果刷新的正是当前编辑的文件，参数面板与预检也一并更新。
+    /// </summary>
+    [RelayCommand]
+    private async Task RefreshMetadataAsync(MediaFileViewModel? file)
+    {
+        var target = file ?? SelectedFile;
+        if (target is null)
+        {
+            return;
+        }
+
+        StatusText = $"正在重新读取「{target.FileName}」…";
+
+        try
+        {
+            var info = await _ffmpeg.ProbeAsync(target.Path).ConfigureAwait(true);
+            if (info is null)
+            {
+                target.ApplyFailure("ffprobe 无法读取该文件");
+                StatusText = $"「{target.FileName}」重新读取失败";
+                AppLog.Warn($"刷新元数据失败：{target.Path}", "Transcode");
+                return;
+            }
+
+            target.ApplyInfo(info);
+
+            if (ReferenceEquals(target.Parameters, Params))
+            {
+                RefreshAudioTrackUi();
+                Revalidate();
+            }
+
+            StatusText = $"已刷新「{target.FileName}」的元数据";
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(ex, "TranscodeViewModel.RefreshMetadata");
+            StatusText = $"刷新元数据失败：{ex.Message}";
+        }
     }
 
     [RelayCommand]
