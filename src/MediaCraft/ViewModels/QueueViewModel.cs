@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MediaCraft.Logging;
 using MediaCraft.Queue;
 
 namespace MediaCraft.ViewModels;
@@ -173,9 +175,93 @@ public sealed partial class QueueViewModel : ObservableObject
 
         if (choice == System.Windows.MessageBoxResult.OK)
         {
-            _queue.ClearAll();
-            SelectedJob = null;
-            RefreshSummary();
+            ClearAllCore();
+        }
+    }
+
+    /// <summary>清空队列本身（不弹确认），给需要先确认再清空的调用方用。</summary>
+    private void ClearAllCore()
+    {
+        _queue.ClearAll();
+        SelectedJob = null;
+        RefreshSummary();
+    }
+
+    /// <summary>
+    /// 删除队列里所有任务的源文件（去重后送回收站），随后清空队列 —— 源文件没了，任务也就没意义。
+    /// 删的是用户的原始素材而不是转码产物，所以确认框里列出要删的文件名并要求二次确认。
+    /// </summary>
+    [RelayCommand]
+    private void DeleteAllSources()
+    {
+        var sources = Jobs
+            .Select(j => j.SourcePath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(File.Exists)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (sources.Length == 0)
+        {
+            System.Windows.MessageBox.Show(
+                "队列里没有可以删除的源文件（可能文件已不在原位置）。",
+                "删除全部源文件",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Information);
+            return;
+        }
+
+        var preview = string.Join("\n", sources.Take(6).Select(Path.GetFileName));
+        if (sources.Length > 6)
+        {
+            preview += $"\n……另有 {sources.Length - 6} 个";
+        }
+
+        var choice = System.Windows.MessageBox.Show(
+            $"将删除 {sources.Length} 个源文件（移到回收站），并清空队列：\n\n{preview}\n\n" +
+            "注意：删的是你的原始素材，不是转码产物。请先确认输出的视频没有问题。\n" +
+            "删除后可以从回收站还原。",
+            "删除全部源文件",
+            System.Windows.MessageBoxButton.OKCancel,
+            System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.Cancel);
+
+        if (choice != System.Windows.MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        var deleted = 0;
+        var failed = new List<string>();
+        foreach (var path in sources)
+        {
+            try
+            {
+                // 送回收站而不是直接抹掉：点错了还能还原
+                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                    path,
+                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                deleted++;
+            }
+            catch (Exception ex)
+            {
+                failed.Add($"{Path.GetFileName(path)}：{ex.Message}");
+                AppLog.Warn($"删除源文件失败：{path} —— {ex.Message}", "Queue");
+            }
+        }
+
+        ClearAllCore();
+        AppLog.Info($"删除源文件：成功 {deleted} 个、失败 {failed.Count} 个", "Queue");
+
+        if (failed.Count > 0)
+        {
+            System.Windows.MessageBox.Show(
+                $"已删除 {deleted} 个，{failed.Count} 个未能删除：\n\n" + string.Join("\n", failed.Take(5)),
+                "删除全部源文件",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Warning);
         }
     }
 

@@ -24,6 +24,7 @@
                         <Button Content="取消当前" Style="{StaticResource SecondaryButton}" Command="{Binding CancelSelectedCommand}" Margin="0,0,6,0" />
                         <Button Content="重试失败" Style="{StaticResource SecondaryButton}" Command="{Binding RetryFailedCommand}" Margin="0,0,6,0" />
                         <Button Content="清除已完成" Style="{StaticResource SecondaryButton}" Command="{Binding ClearFinishedCommand}" Margin="0,0,6,0" />
+                        <Button Content="删除全部源文件" Style="{StaticResource DangerButton}" Command="{Binding DeleteAllSourcesCommand}" Margin="0,0,6,0" ToolTip="把队列里所有任务的源文件移到回收站，然后清空队列（需二次确认）" />
                         <Button Content="清空队列" Style="{StaticResource DangerButton}" Command="{Binding ClearAllCommand}" />
                     </StackPanel>
                     <TextBlock Text="" />
