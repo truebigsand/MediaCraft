@@ -32,7 +32,7 @@
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                     <Button Content="↑ 上移" Style="{StaticResource LinkButton}" Command="{Binding MoveUpCommand}" Margin="0,0,10,0" />
                     <Button Content="↓ 下移" Style="{StaticResource LinkButton}" Command="{Binding MoveDownCommand}" Margin="0,0,10,0" />
-                    <Button Content="移除选中" Style="{StaticResource LinkButton}" Command="{Binding RemoveSelectedCommand}" Margin="0,0,10,0" />
+                    <Button Content="移除选中" Style="{StaticResource LinkButton}" Command="{Binding RemoveSelectedCommand}" Margin="0,0,10,0" ToolTip="从队列移除选中任务（Delete）" />
                     <Button Content="取消全部" Style="{StaticResource LinkButton}" Command="{Binding CancelAllCommand}" Margin="0,0,10,0" />
                     <Button Content="开始 / 继续" Style="{StaticResource LinkButton}" Command="{Binding StartCommand}" />
                 </StackPanel>
@@ -67,6 +67,10 @@
                          HorizontalContentAlignment="Stretch"
                          PreviewMouseRightButtonDown="OnJobListRightClick"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <!-- Delete 键从队列移除选中任务（与「移除选中」等价） -->
+                    <ListBox.InputBindings>
+                        <KeyBinding Key="Delete" Command="{Binding RemoveSelectedCommand}" />
+                    </ListBox.InputBindings>
                     <!-- 右键菜单条目按右键所在的任务生效（见 code-behind 的 _contextJob） -->
                     <ListBox.ContextMenu>
                         <ContextMenu>

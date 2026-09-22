@@ -36,7 +36,7 @@
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="添加文件" Style="{StaticResource SecondaryButton}" Click="OnAddFilesClick" Margin="0,0,6,0" />
                         <Button Content="添加文件夹" Style="{StaticResource SecondaryButton}" Click="OnAddFolderClick" Margin="0,0,6,0" />
-                        <Button Content="移除" Style="{StaticResource SecondaryButton}" Command="{Binding RemoveSelectedCommand}" CommandParameter="{Binding SelectedFile}" Margin="0,0,6,0" />
+                        <Button Content="移除" Style="{StaticResource SecondaryButton}" Command="{Binding RemoveSelectedCommand}" CommandParameter="{Binding SelectedFile}" Margin="0,0,6,0" ToolTip="移除选中的文件（Delete）" />
                         <Button Content="清空" Style="{StaticResource DangerButton}" Command="{Binding ClearFilesCommand}" />
                     </StackPanel>
                     <TextBlock Text="" />
@@ -52,6 +52,11 @@
                               BorderThickness="0"
                               PreviewMouseRightButtonDown="OnFileListRightClick"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <!-- Delete 键移除选中项（与工具栏「移除」等价）；只在列表有焦点时生效，
+                             所以不会和参数面板里的文本框抢键 -->
+                        <ListView.InputBindings>
+                            <KeyBinding Key="Delete" Command="{Binding RemoveSelectedCommand}" />
+                        </ListView.InputBindings>
                         <!--
                             右键菜单挂在 ListView 上（单个实例），右键落在哪一行由
                             PreviewMouseRightButtonDown 记下来。不放进 ItemContainerStyle 的 Setter：
