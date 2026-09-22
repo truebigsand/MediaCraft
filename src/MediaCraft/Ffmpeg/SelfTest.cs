@@ -1043,6 +1043,44 @@ public static class SelfTest
         syncCase.Passed = syncCase.Failures.Count == 0;
         results.Add(syncCase);
 
+        // ── 6b. 滑块换算立即写入高级字段 ──
+        // 用户报过：简单模式拖完滑块再切到高级模式，preset 还是旧值。
+        // 原因是同步只在切换模式时做、且 preset 非空就不补 —— 所以这里让高级字段先带值再拖滑块。
+        var sliderCase = new CaseResult { Name = "参数 · 滑块换算立即同步到高级字段" };
+
+        foreach (var encoder in EncoderCatalog.All)
+        {
+            var parameters = new TranscodeParams
+            {
+                EncoderId = encoder.Id,
+                QualityMode = QualityMode.Simple,
+                Preset = "旧值",      // 非空：这正是漏同步的前提
+                QualityValue = 1,
+            };
+
+            parameters.QualitySlider = 90;
+
+            var expectedQuality = EncoderCatalog.MapSliderToQuality(encoder, 90);
+            var expectedPreset = EncoderCatalog.MapSliderToPreset(encoder, 90);
+
+            if (parameters.QualityValue != expectedQuality)
+            {
+                sliderCase.Failures.Add(
+                    $"{encoder.Id}：滑块拖到 90 后 QualityValue 应为 {expectedQuality}，实际 {parameters.QualityValue}");
+            }
+
+            if (!string.Equals(parameters.Preset, expectedPreset, StringComparison.Ordinal))
+            {
+                sliderCase.Failures.Add(
+                    $"{encoder.Id}：滑块拖到 90 后 Preset 应为「{expectedPreset}」，实际「{parameters.Preset}」");
+            }
+        }
+
+        sliderCase.Details.Add($"{EncoderCatalog.All.Count} 个编码器：拖滑块后 QualityValue 与 Preset 都立即跟上");
+
+        sliderCase.Passed = sliderCase.Failures.Count == 0;
+        results.Add(sliderCase);
+
         // ── 7. 音频编码器元数据（无损标记 / 固定档位 / PCM 码率公式）──
         var audioCase = new CaseResult { Name = "音频 · 编码器元数据与 PCM 码率公式" };
 

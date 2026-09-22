@@ -505,7 +505,9 @@ public sealed partial class TranscodeParams : ObservableObject
         var encoder = Encoder;
         if (QualityMode == QualityMode.Advanced)
         {
-            // 简单 → 高级：把滑块换算成原生值
+            // 简单 → 高级：把滑块换算成原生值。
+            // preset 只在还没设置时补一个，避免在两种模式之间来回切换时被反复换算而漂移
+            //（拖滑块时的同步走 ApplySliderMapping，那里是无条件写的）
             QualityValue = Ffmpeg.EncoderCatalog.MapSliderToQuality(encoder, QualitySlider);
             if (string.IsNullOrEmpty(Preset))
             {
@@ -516,6 +518,36 @@ public sealed partial class TranscodeParams : ObservableObject
         {
             // 高级 → 简单：把原生值反推回滑块位置
             QualitySlider = Ffmpeg.EncoderCatalog.MapQualityToSlider(encoder, QualityValue);
+        }
+    }
+
+    /// <summary>
+    /// 拖动滑块时立即把换算结果写进高级字段。
+    ///
+    /// 不能只在切换模式时同步：那样用户调完滑块再切到高级模式，看到的还是上一次的原生值
+    /// （preset 非空时更是完全不动，因为切模式那只在空值时才补）。
+    /// </summary>
+    private void ApplySliderMapping()
+    {
+        var encoder = Encoder;
+        QualityValue = Ffmpeg.EncoderCatalog.MapSliderToQuality(encoder, QualitySlider);
+        Preset = Ffmpeg.EncoderCatalog.MapSliderToPreset(encoder, QualitySlider);
+    }
+
+    partial void OnQualitySliderChanged(int value)
+    {
+        if (QualityMode == QualityMode.Simple)
+        {
+            ApplySliderMapping();
+        }
+    }
+
+    partial void OnEncoderIdChanged(string value)
+    {
+        // 换编码器后滑块的换算结果会变（质量范围与 preset 命名都不同）
+        if (QualityMode == QualityMode.Simple)
+        {
+            ApplySliderMapping();
         }
     }
 
