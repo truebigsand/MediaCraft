@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>MediaCraft</AssemblyName>
     <RootNamespace>MediaCraft</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <StartupObject>MediaCraft.Program</StartupObject>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <SatelliteResourceLanguages>zh-Hans</SatelliteResourceLanguages>

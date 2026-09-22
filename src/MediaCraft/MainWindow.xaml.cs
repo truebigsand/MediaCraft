@@ -24,7 +24,7 @@ public partial class MainWindow : Window
 
         DataContext = viewModel;
         LogList.ItemsSource = _logEntries;
-        StatusVersion.Text = "v" + (typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "0.1.0");
+        StatusVersion.Text = "v" + (typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "0.3.0");
 
         foreach (var entry in AppLog.Snapshot())
         {
