@@ -167,6 +167,14 @@
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
+    <!-- ComboBoxItem 的默认模板会用 FindAncestor 去问 ItemsControl 要 ContentAlignment，
+         但下拉列表还没打开时条目容器就已经生成、祖先链里还没有 ComboBox，
+         于是每个条目都往日志里刷两条绑定错误（一次启动近千条）。这里直接给定值消掉它。 -->
+    <Style TargetType="ComboBoxItem">
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
     <Style TargetType="CheckBox">
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
